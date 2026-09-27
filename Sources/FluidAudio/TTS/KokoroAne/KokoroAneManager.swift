@@ -15,9 +15,13 @@ import Foundation
 ///   * One default voice per variant (`af_heart` for English, `zf_001` for
 ///     Mandarin); additional voices download on demand via ``setDefaultVoice``
 ///     / `voice:` / `initialize(preloadVoices:)`.
-///   * IPA input capped at 512 tokens — chunk longer prompts upstream.
-///   * Loads from HF path `kokoro-82m-coreml/ANE/` (English) or
-///     `ANE-zh/` (Mandarin).
+///   * IPA input capped at 512 tokens. The high-level text API
+///     (``synthesize(text:voice:speed:)`` / ``synthesizeDetailed(text:voice:speed:)``)
+///     auto-chunks longer prompts at whitespace / pause punctuation (#712, #940);
+///     the low-level ``synthesizeFromPhonemes(_:voice:speed:)`` stays strict
+///     and throws ``KokoroAneError/phonemeSequenceTooLong(_:)`` past the cap.
+///   * Loads from HF path `kokoro-82m-coreml/ANE/` (English, Spanish,
+///     French), `ANE-zh/` (Mandarin) or `ANE-ja/` (Japanese).
 ///
 /// Pipeline:
 ///   * Text → IPA via ``KokoroAneEnglishPhonemizer`` (Misaki lexicon first
@@ -95,6 +99,17 @@ public actor KokoroAneManager {
             // function-word forms, issue #691). Missing lexicon degrades
             // to the BART-G2P-only path rather than failing initialize.
             _ = await KokoroAneResourceDownloader.ensureEnglishLexicon(directory: nil)
+        }
+        switch variant {
+        case .french:
+            // Lexicon + CharsiuG2P fallback, fetched up front so the first
+            // synthesis does not stall on (or fail without) the network.
+            _ = try await store.frenchG2PPipeline()
+            try await KokoroAneResourceDownloader.ensureMultilingualG2PAssets(directory: nil)
+        case .spanish:
+            _ = await store.spanishLexicon()
+        case .english, .mandarin, .japanese:
+            break
         }
         if let voices = preloadVoices {
             for voice in voices {
@@ -225,8 +240,23 @@ public actor KokoroAneManager {
         speed: Float = KokoroAneConstants.defaultSpeed
     ) async throws -> KokoroAneSynthesisResult {
         let frontend = try await resolveFrontend(for: text)
-        return try await runChain(
-            phonemes: frontend.phonemes, normalizedText: frontend.normalizedText, voice: voice, speed: speed)
+        // Chunk after normalization / G2P so written forms are never split; the
+        // cap is in Unicode scalars, as the vocab encoder counts it (#712, #940).
+        let chunks = PhonemeChunker.chunk(
+            frontend.phonemes, maxLength: KokoroAneConstants.maxPhonemeLength, countsUnicodeScalars: true)
+        guard chunks.count > 1 else {
+            return try await runChain(
+                phonemes: frontend.phonemes, normalizedText: frontend.normalizedText, voice: voice, speed: speed)
+        }
+        var parts: [KokoroAneSynthesisResult] = []
+        for chunk in chunks {
+            try Task.checkCancellation()
+            parts.append(try await runChain(phonemes: chunk, normalizedText: nil, voice: voice, speed: speed))
+        }
+        var result = KokoroAneSynthesisResult.concatenating(parts)
+        result.normalizedText = frontend.normalizedText
+        result.phonemes = frontend.phonemes
+        return result
     }
 
     /// Resolve the exact phoneme string ``synthesize(text:voice:speed:)``
@@ -241,6 +271,10 @@ public actor KokoroAneManager {
     /// Kokoro training frontend). A string made only of phoneme-alphabet
     /// scalars is treated as pre-computed IPA and passed through (issue
     /// #698); digits, kana and kanji always go through the frontend.
+    /// Spanish: NeMo normalization, then ``SpanishG2P`` spelling rules with
+    /// the `es_lexicon_cache.json` exceptions. French: NeMo normalization,
+    /// then `fr_lexicon_cache.json` with a CharsiuG2P fallback (``FrenchG2P``). Both emit espeak-ng-style IPA;
+    /// pre-computed IPA goes through ``synthesizeFromPhonemes(_:voice:speed:)``.
     public func phonemes(for text: String) async throws -> String {
         try await resolveFrontend(for: text).phonemes
     }
@@ -291,7 +325,30 @@ public actor KokoroAneManager {
             let normalized = NemoTextNormalizer.normalize(folded, language: .japanese)
             let g2p = try await store.japaneseG2PPipeline()
             return (normalized, try await g2p.phonemize(normalized))
+        case .spanish:
+            var normalized = NemoTextNormalizer.normalize(text, language: .spanish)
+            // Without the engine linked, read numbers here rather than let the
+            // tokenizer drop them.
+            if !NemoTextNormalizer.isAvailable {
+                normalized = RomanceNumberNormalizer.normalize(normalized, language: .spanish)
+            }
+            let lexicon = await store.spanishLexicon()
+            return (normalized, try Self.nonEmpty(SpanishG2P.phonemize(normalized, lexicon: lexicon), for: text))
+        case .french:
+            var normalized = NemoTextNormalizer.normalize(text, language: .french)
+            if !NemoTextNormalizer.isAvailable {
+                normalized = RomanceNumberNormalizer.normalize(normalized, language: .french)
+            }
+            let g2p = try await store.frenchG2PPipeline()
+            return (normalized, try Self.nonEmpty(await g2p.phonemize(normalized), for: text))
         }
+    }
+
+    private static func nonEmpty(_ phonemes: String, for text: String) throws -> String {
+        guard phonemes.contains(where: { $0.isLetter }) else {
+            throw KokoroAneError.inputProcessingFailed("G2P produced no phonemes for '\(text)'.")
+        }
+        return phonemes
     }
 
     /// Bypass G2P; feed an already-IPA phoneme string directly.
@@ -332,8 +389,8 @@ public actor KokoroAneManager {
 
         let inputIds = try vocab.encode(phonemes)
         // Voice pack indexing matches `convert.py:get_ref_data` — row is the
-        // raw phoneme-string length (BOS/EOS not counted).
-        let phonemeCount = phonemes.count
+        // raw phoneme-string length in scalars (BOS/EOS not counted).
+        let phonemeCount = KokoroAneVocab.phonemeLength(phonemes)
         let (styleS, styleTimbre) = pack.slice(for: phonemeCount)
 
         var result = try await KokoroAneSynthesizer.synthesize(

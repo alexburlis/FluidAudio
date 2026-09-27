@@ -8,6 +8,13 @@
 [![Discord](https://img.shields.io/badge/Discord-Join%20Chat-7289da.svg)](https://discord.gg/WNsvaCtmDe)
 [![Hugging Face Models](https://img.shields.io/badge/Hugging%20Face%20Models-500k%2B%20Monthly%20Downloads-brightgreen?logo=huggingface)](https://huggingface.co/FluidInference)[![Ask DeepWiki](https://deepwiki.com/badge.svg)](https://deepwiki.com/FluidInference/FluidAudio)
 
+<div align="center">
+
+<a href="https://trendshift.io/repositories/26004?utm_source=repository-badge&amp;utm_medium=badge&amp;utm_campaign=badge-repository-26004" target="_blank" rel="noopener noreferrer"><img src="https://trendshift.io/api/badge/repositories/26004" alt="FluidInference%2FFluidAudio | Trendshift" width="250" height="55"/></a>
+
+</div>
+
+
 FluidAudio is a Swift SDK for fully local, low-latency audio AI on Apple devices, with inference offloaded to the Apple Neural Engine (ANE), resulting in less memory and generally faster inference.
 
 The SDK includes state-of-the-art speaker diarization, transcription, and voice activity detection via open-source models (MIT/Apache 2.0) that can be integrated with just a few lines of code. Models are optimized for background processing, ambient computing and always on workloads by running inference on the ANE, minimizing CPU usage and avoiding GPU/MPS entirely.
@@ -40,6 +47,7 @@ Want to convert your own model? Check [möbius](https://github.com/FluidInferenc
 - **Speaker Diarization (Online + Offline)**: Speaker separation and identification across audio streams. Streaming pipeline for real-time processing and offline batch pipeline with advanced clustering.
 - **Speaker Embedding Extraction**: Generate speaker embeddings for voice comparison and clustering, you can use this for speaker identification
 - **Voice Activity Detection (VAD)**: Voice activity detection with Silero models
+- **Speech Enhancement (AEC + Noise Suppression)**: [LocalVQE](Documentation/Enhancement/LocalVQE.md) (4.8M) removes loudspeaker echo, noise and reverb from 16 kHz mic audio given a far-end reference; streaming with 16 ms latency (beta)
 - **Apple Neural Engine**: Models run efficiently on Apple's ANE for maximum performance with minimal power consumption
 - **Open-Source Models**: All models are publicly available on HuggingFace — converted and optimized by our team; permissive licenses. See [full model catalog](Documentation/Models.md).
 
@@ -112,6 +120,8 @@ Make a PR if you want to add your app, please keep it in chronological order.
 | **[Transkript](https://www.transkript.nl/)** | — | Offline AI transcription assistant for iPhone, iPad, and Mac. Transcribes audio/video files and live recordings in 25+ European languages, with color-coded speaker labels, AI summaries, translations, and subtitle export. Uses FluidAudio for ASR and speaker diarization. |
 | **[Notiva](https://trynotiva.com/)** | — | Menu-bar notes app for Mac meetings. Live on-device transcription on the Neural Engine with speaker diarization, merged with your own notes into a single document. Uses FluidAudio for transcription and speaker diarization. |
 | **[oats](https://github.com/ariso-ai/oats)** | ✓ | Open-source (MIT) meeting notes app for macOS and Windows built with Tauri and Vue. One-click recording, real-time transcription with speaker labels, and on-device LLM note generation in Markdown. Uses FluidAudio on the Apple Neural Engine for macOS transcription. |
+| **[Orca One](https://orcaone.com/)** | — | Private Mac dictation and meeting transcription with on-device processing. Uses FluidAudio's Parakeet ASR and Silero VAD. |
+| **[Banter](https://github.com/arvindvenkataramani/banter)** | ✓ | Open-source (Apache-2.0), self-hosted voice interface for OpenClaw, adaptable to other agent harnesses. Runs in the browser on desktop or phone. Its two Swift servers put FluidAudio behind OpenAI-compatible HTTP and streaming WebSocket APIs: Parakeet TDT v3, Parakeet Unified and Nemotron streaming ASR, and Pocket TTS, Kokoro and LuxTTS for speech, all on Apple Silicon. |
 
 More apps built with FluidAudio are listed in [Documentation/Showcase.md](Documentation/Showcase.md).
 
@@ -280,6 +290,7 @@ The default is `false` — no behaviour change for existing callers. Combine wit
     - [Speaker Diarization Guide](Documentation/Diarization/GettingStarted.md)
   - VAD: [Getting Started](Documentation/VAD/GettingStarted.md)
     - [Segmentation](Documentation/VAD/Segmentation.md)
+  - Speech Enhancement: [LocalVQE (AEC + NS)](Documentation/Enhancement/LocalVQE.md)
     - [Model Conversion Code](https://github.com/FluidInference/mobius)
 - [Benchmarks](Documentation/Benchmarks.md)
 - [CUA-S1-FORMS decision scoring](Documentation/API.md#decision-scoring)
@@ -309,7 +320,9 @@ claude mcp add -s user -t http deepwiki https://mcp.deepwiki.com/mcp
 ## Automatic Speech Recognition (ASR) / Transcription
 
 - **Models**:
-  - `FluidInference/parakeet-tdt-0.6b-v3-coreml` (multilingual, 25 European languages)
+  - `FluidInference/parakeet-ultra-coreml` (multilingual, 25 European languages; recommended — more accurate than v3 at the same speed, see [Parakeet Ultra](Documentation/ASR/ParakeetUltra.md))
+  - `FluidInference/parakeet-tdt-0.6b-v3-coreml` (multilingual, 25 European languages; library default)
+  - `FluidInference/parakeet-redux-coreml` (multilingual, smallest download at ~220 MB; iOS 18+ / macOS 15+ only, see [Parakeet Redux](Documentation/ASR/ParakeetRedux.md))
   - `FluidInference/parakeet-tdt-0.6b-v2-coreml` (English-only, highest recall)
 - **Processing Mode**: Batch transcription for complete audio files
 - **Real-time Factor**: ~190x on M4 Pro (processes 1 hour of audio in ~19 seconds)
@@ -324,7 +337,7 @@ import FluidAudio
 // Batch transcription from an audio file
 Task {
     // 1) Initialize ASR manager and load models
-    let models = try await AsrModels.downloadAndLoad(version: .v3)  // Switch to .v2 for English-only work
+    let models = try await AsrModels.downloadAndLoad(version: .ultra)  // .v3 is the default; .v2 for English-only
     let asrManager = AsrManager(config: .default)
     try await asrManager.loadModels(models)
 
@@ -582,6 +595,33 @@ swift run fluidaudiocli vad-benchmark --num-files 50 --threshold 0.3
 `swift run fluidaudiocli vad-analyze --help` lists every tuning option, including
 negative-threshold overrides, max-speech splitting, padding, and chunk size.
 Offline mode also reports RTFx using the model's per-chunk processing time.
+
+## Speech Enhancement (Echo Cancellation + Noise Suppression)
+
+> **⚠️ Beta:** port fidelity validated (scores identically to the upstream GGML engine on the 800-clip AEC-Challenge blind set); the published table is only partially reproduced, with unresolved v1.2 far-end values and an ambiguous ERLE protocol. Not yet exercised in production call pipelines.
+
+[LocalVQE](https://github.com/localai-org/LocalVQE) (Apache-2.0) is a compact
+neural acoustic echo canceller + noise suppressor + dereverberator for 16 kHz
+speech. Feed it the mic capture and a far-end reference (what the speaker
+played) and it returns clean near-end speech, sample-aligned with the input.
+Two checkpoints (v1.3 4.8M, v1.2 1.3M) in 256 ms and 16 ms chunk exports;
+36× / 14× real-time on CPU for v1.3. On an exploratory AEC-Challenge synthetic
+subset v1.3 lifts ASR near-end word recall from 44.1% to 77.6% and cuts
+far-end word leakage from 34.0% to 1.1%. See
+[Documentation/Enhancement/LocalVQE.md](Documentation/Enhancement/LocalVQE.md).
+
+```swift
+let vqe = try await LocalVqeManager()
+let clean = try await vqe.process(mic: micSamples, reference: farEndSamples)
+
+// Live capture: push buffers of any size, 16 ms algorithmic latency
+let stream = try await LocalVqeManager(config: LocalVqeConfig(chunk: .realtime16ms)).makeStream()
+let out = try await stream.enhance(mic: micBuffer, reference: refBuffer)
+```
+
+```bash
+swift run -c release fluidaudiocli enhance mic.wav --reference speaker.wav --output clean.wav
+```
 
 ## Text‑To‑Speech (TTS)
 

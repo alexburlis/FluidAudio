@@ -106,6 +106,7 @@ public struct TTS {
         var luxttsPromptText: String? = nil
         var luxttsSpeed: Float = LuxTtsConstants.defaultSpeed
         var luxttsSeed: UInt64 = LuxTtsConstants.defaultSeed
+        var luxttsRedraws: Int = LuxTtsConstants.spuriousPauseRetries
         var neuttsSeed: UInt64 = 1234
         var neuttsEmotion = NeuTtsConstants.defaultEmotion
         var chatterboxSeed: UInt64 = 42
@@ -145,6 +146,10 @@ public struct TTS {
                         kokoroAneVariant = .mandarin
                     case "ja", "japanese", "jp":
                         kokoroAneVariant = .japanese
+                    case "es", "spanish":
+                        kokoroAneVariant = .spanish
+                    case "fr", "french":
+                        kokoroAneVariant = .french
                     case "micro", "inflect-micro":
                         inflectVariant = .micro
                     case "nano", "inflect-nano":
@@ -233,6 +238,11 @@ public struct TTS {
             case "--prompt-text":
                 if i + 1 < arguments.count {
                     luxttsPromptText = arguments[i + 1]
+                    i += 1
+                }
+            case "--redraws":
+                if i + 1 < arguments.count, let v = Int(arguments[i + 1]), v >= 0 {
+                    luxttsRedraws = v
                     i += 1
                 }
             case "--temperature":
@@ -408,7 +418,7 @@ public struct TTS {
                 promptAudioPath: luxttsPromptAudioPath,
                 promptText: luxttsPromptText,
                 treatAsPhonemes: treatAsPhonemes,
-                speed: luxttsSpeed, seed: luxttsSeed,
+                speed: luxttsSpeed, seed: luxttsSeed, redraws: luxttsRedraws,
                 metricsPath: metricsPath)
         case .neuTts:
             await runNeuTts(
@@ -519,7 +529,7 @@ public struct TTS {
         text: String, output: String,
         promptAudioPath: String?, promptText: String?,
         treatAsPhonemes: Bool,
-        speed: Float, seed: UInt64,
+        speed: Float, seed: UInt64, redraws: Int,
         metricsPath: String?
     ) async {
         guard let promptAudioPath else {
@@ -570,14 +580,16 @@ public struct TTS {
                     promptAudio: promptURL,
                     promptPhonemes: resolvedPromptText,
                     speed: speed,
-                    seed: seed)
+                    seed: seed,
+                    maxRedraws: redraws)
             } else {
                 result = try await manager.synthesize(
                     text: text,
                     promptAudio: promptURL,
                     promptText: resolvedPromptText,
                     speed: speed,
-                    seed: seed)
+                    seed: seed,
+                    maxRedraws: redraws)
             }
             let tSynth1 = Date()
 
@@ -610,6 +622,7 @@ public struct TTS {
             logger.info(
                 "  Frames: prompt=\(result.promptFrames) "
                     + "generated=\(result.generatedFrames) total=\(result.featuresLength)")
+            logger.info("  Re-draws: \(result.redraws), residual pauses: \(result.residualPauses)")
             logger.info("  RMS: \(String(format: "%.5f", rms))")
             logger.info("  RTFx: \(String(format: "%.2f", rtfx))x")
             logger.info("  Total: \(String(format: "%.3f", totalS))s")
@@ -904,7 +917,7 @@ public struct TTS {
                     if let lex = try loadMandarinLexicon(from: lexiconPath) {
                         await manager.setMandarinCustomLexicon(lex)
                     }
-                case .english, .japanese:
+                case .english, .japanese, .spanish, .french:
                     logger.warning(
                         "--lexicon ignored: only the KokoroAne Mandarin variant "
                             + "supports a custom lexicon.")
@@ -916,7 +929,7 @@ public struct TTS {
             let tLoad1 = Date()
 
             let tSynth0 = Date()
-            // synthesizeDetailed handles all three text frontends. With
+            // synthesizeDetailed handles every variant's text frontend. With
             // --phonemes, bypass G2P and feed a pre-computed phoneme string.
             let detailed: KokoroAneSynthesisResult
             if treatAsPhonemes {
@@ -1555,12 +1568,15 @@ public struct TTS {
                                                                 --prompt-text are espeak IPA (en-us)
                                      --speed 1.0                speech-rate divisor (default 1.0)
                                      --seed N                   flow-matching noise seed (default 42)
+                                     --redraws N                re-draw budget per span for the
+                                                                mid-phrase pause detector (default 3;
+                                                                0 = raw pass for the given seed)
               --lexicon, -l        Custom pronunciation lexicon file (KokoroAne --variant zh only):
                                      word  pinyin1 pinyin2   (e.g. zi4 jie2)
                                      word  @bopomofo1        (escape: @-prefixed,
                                                               bypasses tone sandhi)
                                    Ignored for KokoroAne English (no lexicon support yet).
-              --variant            KokoroAne language (values: en,zh).
+              --variant            KokoroAne language (values: en,zh,ja,es,fr).
                                    For --backend kokoro-ane --variant zh, Hanzi
                                    input is auto-phonemized through the bundled
                                    Mandarin G2P pipeline (FMM segmentation +

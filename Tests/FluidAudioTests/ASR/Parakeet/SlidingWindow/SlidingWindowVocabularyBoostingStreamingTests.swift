@@ -52,7 +52,14 @@ final class SlidingWindowVocabularyBoostingStreamingTests: XCTestCase {
         let vocabulary = CustomVocabularyContext(terms: [
             CustomVocabularyTerm(text: "Codex"), CustomVocabularyTerm(text: "follow-up"),
         ])
-        try await manager.configureVocabularyBoosting(vocabulary: vocabulary, ctcModels: ctcModels)
+        // Small dictionaries use TDT-anchored rescoring, as recommended in
+        // CustomVocabulary.md. Acoustic-only rescue deliberately trades false
+        // substitutions for recall and is not part of this session regression.
+        try await manager.configureVocabularyBoosting(
+            vocabulary: vocabulary,
+            ctcModels: ctcModels,
+            config: VocabularyRescorer.Config(spotterRescueEnabled: false)
+        )
 
         // Fix 1: the in-code terms received CTC token IDs at configure time.
         let configuredTerms = await manager.vocabularyBoosting?.vocabulary.terms ?? []
@@ -92,9 +99,9 @@ final class SlidingWindowVocabularyBoostingStreamingTests: XCTestCase {
         let folded = text.lowercased()
 
         XCTAssertFalse(folded.isEmpty, "boosted streaming transcript must not be empty")
-        // #899: the spurious window-start detection must not rewrite the first
-        // word through the (now bounded) nearest-word fallback.
-        XCTAssertTrue(folded.hasPrefix("hey"), "first word rewritten by the rescue pass: \(text)")
+        // Rescoring must preserve the opening word along with the rest of
+        // the unconfirmed window under the documented small-vocabulary policy.
+        XCTAssertTrue(folded.hasPrefix("hey"), "first word changed during rescoring: \(text)")
         // Fix 3: the first (volatile) window's text survives the second volatile window.
         XCTAssertTrue(folded.contains("before we go to them"), "first window lost: \(text)")
         // #855 fixture contract: the final window's tail survives.

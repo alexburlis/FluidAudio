@@ -12,6 +12,8 @@ Long-form audio processed via `SlidingWindowAsrManager` — chunked, overlapped,
 |-------|-------------|---------|
 | **Parakeet TDT v2** | Batch speech-to-text, English only (0.6B params). TDT architecture. | First ASR model added. |
 | **Parakeet TDT v3** | Batch speech-to-text, 25 European languages (0.6B params). Default ASR model. | Released after v2 to add multilingual support. |
+| **Parakeet Ultra** ([docs](ASR/ParakeetUltra.md)) | moondream's post-training of v3: same architecture, languages and API (`AsrModelVersion.ultra`). More accurate than v3 on every benchmark (LibriSpeech test-clean 2.13 vs 2.27 %, test-other 3.81 vs 4.12 %, FLEURS 24-language mean 11.67 vs 14.81 %) at the same speed. int8 encoder (595 MB), ANE, iOS 17+. | **Recommended** for new integrations. |
+| **Parakeet Redux** ([docs](ASR/ParakeetRedux.md)) | moondream's ternary re-training of v3 (`AsrModelVersion.redux`). 183 MB 2-bit encoder (~220 MB model dir). Better than v3 on FLEURS (13.06 vs 14.81 %), worse on English (2.71 vs 2.27 %). iOS 18+ / macOS 15+ only (use Ultra on iOS 17); ANE by default, several-minute first compile. | For size-constrained apps on iOS 18+. |
 | **Parakeet TDT-CTC-110M** | Hybrid TDT-CTC batch model (110M params). 3.01% WER on LibriSpeech test-clean. 96.5x RTFx on M2 Mac. Fused preprocessor+encoder for reduced memory footprint. iOS compatible. | Smaller, faster alternative to v3 with competitive accuracy. |
 | **Parakeet TDT Japanese** | Batch speech-to-text, Japanese only (0.6B params). Hybrid model: INT8 CTC-trained preprocessor + encoder paired with a TDT decoder + joint. 6.85% CER on JSUT, 10.8x RTFx on M2. | CTC-only Japanese inference was removed in 846924a1d; only the preprocessor + encoder from the original CTC repo are reused. |
 | **Cohere Transcribe** ([FluidAudio#487](https://github.com/FluidInference/FluidAudio/pull/487), [#537](https://github.com/FluidInference/FluidAudio/pull/537)) | Batch encoder-decoder speech-to-text, 14 languages (en/fr/de/es/it/pt/nl/pl/el/ar/ja/zh/ko/vi). 48-layer Conformer encoder + 8-layer transformer decoder with external KV cache. Mixed precision: INT8 encoder (1.8 GB, iOS 18+) + FP32 ANE-resident static-shape decoder (v2, ~1.6× faster on Apple Silicon than the dynamic FP16 v1 decoder). Hard 35 s per-call audio cap (`max_audio_clip_s` from upstream config), 16 384-token SentencePiece vocab. Language must be passed explicitly via the conditioned prompt. | First Cohere Transcribe port; ANE-optimized v2 decoder (#537) lands fixed `[1, 1, 1, 108]` `attention_mask` so the decoder stays on the Neural Engine. |
@@ -42,6 +44,12 @@ TDT/CTC and the non-autoregressive models above are wrapped by `SlidingWindowAsr
 | Model | Description | Context |
 |-------|-------------|---------|
 | **Silero VAD** | Voice activity detection; speech vs silence on 256ms windows. Segments audio before ASR or diarization. | Support model that other pipelines build on. Converted at the time being the best model out there |
+
+## Speech Enhancement Models
+
+| Model | Description | Context |
+|-------|-------------|---------|
+| **LocalVQE** | Neural acoustic echo cancellation + noise suppression + dereverberation for 16 kHz speech (DeepVQE derivative, Apache-2.0). Takes mic + far-end reference, returns clean near-end speech with 16 ms algorithmic latency. fp32 streaming exports with explicit state: v1.3 (4.8M, default) and v1.2 (1.3M) in 256 ms and 16 ms chunk sizes; 36× / 14× RTFx on CPU (M5 Pro). Managed by `LocalVqeManager` / `LocalVqeStream`. | Requested in [#49](https://github.com/FluidInference/FluidAudio/issues/49#issuecomment-5719663475) for hands-free calls. fp16 rejected (parity 102 → 5 dB); ANE not used. Upstream's GGUF-only v1.4-AEC / GTCRN line not converted. |
 
 ## Diarization Models
 
@@ -79,6 +87,8 @@ Models we converted and tested but are not supported: too large for on-device de
 | Model | HuggingFace Repo |
 |-------|-----------------|
 | Parakeet TDT v3 | [FluidInference/parakeet-tdt-0.6b-v3-coreml](https://huggingface.co/FluidInference/parakeet-tdt-0.6b-v3-coreml) |
+| Parakeet Ultra | [FluidInference/parakeet-ultra-coreml](https://huggingface.co/FluidInference/parakeet-ultra-coreml) |
+| Parakeet Redux | [FluidInference/parakeet-redux-coreml](https://huggingface.co/FluidInference/parakeet-redux-coreml) |
 | Parakeet TDT v2 | [FluidInference/parakeet-tdt-0.6b-v2-coreml](https://huggingface.co/FluidInference/parakeet-tdt-0.6b-v2-coreml) |
 | Parakeet TDT-CTC-110M | [FluidInference/parakeet-tdt-ctc-110m-coreml](https://huggingface.co/FluidInference/parakeet-tdt-ctc-110m-coreml) |
 | Parakeet TDT Japanese | [FluidInference/parakeet-0.6b-ja-coreml](https://huggingface.co/FluidInference/parakeet-0.6b-ja-coreml) (hybrid: CTC preprocessor/encoder + TDT decoder/joint) |
@@ -90,6 +100,7 @@ Models we converted and tested but are not supported: too large for on-device de
 | Parakeet EOU | [FluidInference/parakeet-realtime-eou-120m-coreml](https://huggingface.co/FluidInference/parakeet-realtime-eou-120m-coreml) (subdirs: `/160ms`, `/320ms`, `/1280ms`) |
 | Cohere Transcribe (INT8 hybrid, default) | [FluidInference/cohere-transcribe-03-2026-coreml](https://huggingface.co/FluidInference/cohere-transcribe-03-2026-coreml) (variant: `/q8`) |
 | Silero VAD | [FluidInference/silero-vad-coreml](https://huggingface.co/FluidInference/silero-vad-coreml) |
+| LocalVQE | [FluidInference/localvqe-coreml](https://huggingface.co/FluidInference/localvqe-coreml) (`localvqe-v1.3-4.8M-{16ms,256ms}.mlmodelc`, `localvqe-v1.2-1.3M-{16ms,256ms}.mlmodelc`) |
 | Diarization (Pyannote) | [FluidInference/speaker-diarization-coreml](https://huggingface.co/FluidInference/speaker-diarization-coreml) |
 | LS-EEND | [FluidInference/ls-eend-coreml](https://huggingface.co/FluidInference/ls-eend-coreml) (per-dataset optimized variants: `/optimized/ami`, `/optimized/ch`, `/optimized/dih2`, `/optimized/dih3`) |
 | Sortformer | [FluidInference/diar-streaming-sortformer-coreml](https://huggingface.co/FluidInference/diar-streaming-sortformer-coreml) |

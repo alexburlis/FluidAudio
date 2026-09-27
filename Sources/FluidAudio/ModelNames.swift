@@ -5,7 +5,20 @@ public enum Repo: String, CaseIterable, Sendable {
     /// CUA-S1-FORMS form-option decision scorer. See Decision/CuaS1Forms.
     case cuaS1Forms = "FluidInference/cua-s1-forms-coreml"
     case vad = "FluidInference/silero-vad-coreml"
+    /// LocalVQE speech enhancement (AEC + NS + dereverb). fp32 streaming
+    /// exports of the v1.3 (4.8M) and v1.2 (1.3M) checkpoints in 16 ms and
+    /// 256 ms chunk sizes; the variant key selects one file. See Enhancement/LocalVQE.
+    case localVqe = "FluidInference/localvqe-coreml"
     case parakeetV3 = "FluidInference/parakeet-tdt-0.6b-v3-coreml"
+    /// Parakeet Redux: moondream's ternary ({-1, 0, +1}) re-training of
+    /// parakeet-tdt-0.6b-v3. Same tokenizer, 15 s window and decoder/joint
+    /// contract as v3; the encoder ships as exact 2-bit palettized weights
+    /// (~180 MB vs ~425 MB). Loaded through `AsrModelVersion.redux`.
+    case parakeetRedux = "FluidInference/parakeet-redux-coreml"
+    /// Parakeet Ultra: moondream's full-precision post-training of
+    /// parakeet-tdt-0.6b-v3. Same tokenizer, window and decoder/joint contract
+    /// as v3; int8-linear encoder (~595 MB). Loaded through `AsrModelVersion.ultra`.
+    case parakeetUltra = "FluidInference/parakeet-ultra-coreml"
     case parakeetV2 = "FluidInference/parakeet-tdt-0.6b-v2-coreml"
     case parakeetCtc110m = "FluidInference/parakeet-ctc-110m-coreml"
     case parakeetCtc06b = "FluidInference/parakeet-ctc-0.6b-coreml"
@@ -53,6 +66,7 @@ public enum Repo: String, CaseIterable, Sendable {
     case kokoroAneZh = "FluidInference/kokoro-82m-coreml/ANE-zh"
     case kokoroAneJa = "FluidInference/kokoro-82m-coreml/ANE-ja"
     case sortformer = "FluidInference/diar-streaming-sortformer-coreml"
+    case nemotron3Diarization = "FluidInference/nemotron-3-diarization-coreml"
     case lseendAmi = "FluidInference/ls-eend-coreml/optimized/ami"
     case lseendCallHome = "FluidInference/ls-eend-coreml/optimized/ch"
     case lseendDihard2 = "FluidInference/ls-eend-coreml/optimized/dih2"
@@ -130,8 +144,14 @@ public enum Repo: String, CaseIterable, Sendable {
             return "Nemotron-3.5-ASR-Streaming-Multilingual-0.6b-CoreML"
         case .vad:
             return "silero-vad-coreml"
+        case .localVqe:
+            return "localvqe-coreml"
         case .parakeetV3:
             return "parakeet-tdt-0.6b-v3-coreml"
+        case .parakeetRedux:
+            return "parakeet-redux-coreml"
+        case .parakeetUltra:
+            return "parakeet-ultra-coreml"
         case .parakeetV2:
             return "parakeet-tdt-0.6b-v2-coreml"
         case .parakeetCtc110m:
@@ -174,6 +194,8 @@ public enum Repo: String, CaseIterable, Sendable {
             return "kokoro-82m-coreml/ANE-ja"
         case .sortformer:
             return "diar-streaming-sortformer-coreml"
+        case .nemotron3Diarization:
+            return "nemotron-3-diarization-coreml"
         case .lseendAmi:
             return "ls-eend-coreml/optimized/ami"
         case .lseendCallHome:
@@ -766,6 +788,42 @@ public enum ModelNames {
         ]
     }
 
+    /// LocalVQE speech-enhancement model names.
+    ///
+    /// One `.mlmodelc` per (checkpoint, chunk) pair, e.g.
+    /// `localvqe-v1.3-4.8M-256ms.mlmodelc`. The download variant key
+    /// (`"v1.3-256ms"`) narrows the required set to that single file.
+    public enum LocalVQE {
+        public static func modelFile(variant: LocalVqeVariant, chunk: LocalVqeChunk) -> String {
+            "\(variant.fileStem)-\(chunk.rawValue).mlmodelc"
+        }
+
+        public static func variantKey(variant: LocalVqeVariant, chunk: LocalVqeChunk) -> String {
+            "\(variant.rawValue)-\(chunk.rawValue)"
+        }
+
+        public static var allModels: Set<String> {
+            var files: Set<String> = []
+            for variant in LocalVqeVariant.allCases {
+                for chunk in LocalVqeChunk.allCases {
+                    files.insert(modelFile(variant: variant, chunk: chunk))
+                }
+            }
+            return files
+        }
+
+        /// Required files for a download variant key; the full set when the
+        /// key is absent or unrecognised.
+        public static func requiredModels(variant: String?) -> Set<String> {
+            for v in LocalVqeVariant.allCases {
+                for c in LocalVqeChunk.allCases where variantKey(variant: v, chunk: c) == variant {
+                    return [modelFile(variant: v, chunk: c)]
+                }
+            }
+            return allModels
+        }
+    }
+
     /// Parakeet EOU streaming model names
     public enum ParakeetEOU {
         public static let encoder = "streaming_encoder"
@@ -903,6 +961,27 @@ public enum ModelNames {
     }
 
     /// Sortformer streaming diarization model names
+    public enum Nemotron3 {
+        /// Root-level assets every preset needs (split-graph presets also need
+        /// `pre_encode_proj_t.bin`).
+        public static let silenceEmbeddingFile = "learnable_sil_emb.bin"
+        public static let preEncodeProjectionFile = "pre_encode_proj_t.bin"
+        public static let requiredAssets: Set<String> = [silenceEmbeddingFile, preEncodeProjectionFile]
+
+        /// Identifies which upstream checkpoint the published CoreML bundles were
+        /// converted from.
+        ///
+        /// The cache is keyed on this, not just on file presence: NVIDIA's general-access
+        /// checkpoint is a retrained model rather than a repack of the preview, so a client
+        /// holding preview bundles would otherwise keep serving superseded weights forever
+        /// — silently, since the file layout is identical. **Bump this whenever the
+        /// published weights change.**
+        public static let weightsVersion = "ga-2026-09-23"
+
+        /// Marker file recording `weightsVersion` for the cached bundles.
+        public static let weightsVersionFile = ".fluidaudio-nemotron3-weights"
+    }
+
     public enum Sortformer {
         /// Selects which weight-precision build of the model set to download.
         ///
@@ -1580,7 +1659,10 @@ public enum ModelNames {
         public static let albert = "KokoroAlbert.mlmodelc"
         public static let postAlbert = "KokoroPostAlbert.mlmodelc"
         public static let alignment = "KokoroAlignment.mlmodelc"
-        public static let prosody = "KokoroProsody.mlmodelc"
+        // v2: fp32 compute. The fp16 CPU/ANE path corrupts F0/N at the start of
+        // the utterance for many T_a >= 400 (quiet/garbled onset). Renamed (not
+        // overwritten) so cached clients re-download. See issue #947.
+        public static let prosody = "KokoroProsody_v2.mlmodelc"
         // v2: atan2 phase-correction in the noise-source STFT (removes broad-spectrum
         // HF noise / "sharpness"). Renamed (not overwritten) so cached clients
         // re-download. See mobius laishere-coreml docs/trials-and-errors.md.
@@ -1749,9 +1831,14 @@ public enum ModelNames {
             ]
         case .vad:
             return ModelNames.VAD.requiredModels
+        case .localVqe:
+            return ModelNames.LocalVQE.requiredModels(variant: variant)
         case .parakeetV3:
             let precision = ParakeetEncoderPrecision(rawValue: variant ?? "") ?? .int8
             return ModelNames.ASR.requiredModelsV3(precision: precision)
+        case .parakeetRedux, .parakeetUltra:
+            // Single encoder build; no precision variants.
+            return ModelNames.ASR.requiredModelsV3()
         case .parakeetV2:
             return ModelNames.ASR.requiredModels
         case .parakeetTdtCtc110m:
@@ -1800,6 +1887,14 @@ public enum ModelNames {
                 return [variant]
             }
             return ModelNames.Sortformer.requiredModels
+        case .nemotron3Diarization:
+            // Downloads are driven by `Nemotron3Models.loadFromHuggingFace` via
+            // `download(subdirectory:)` (one preset bundle + the root .bin assets);
+            // provided for exhaustiveness.
+            if let variant = variant {
+                return [variant]
+            }
+            return ModelNames.Nemotron3.requiredAssets
         case .lseendAmi, .lseendCallHome, .lseendDihard2, .lseendDihard3:
             if let variant = variant {
                 return [variant + ".mlmodelc"]
