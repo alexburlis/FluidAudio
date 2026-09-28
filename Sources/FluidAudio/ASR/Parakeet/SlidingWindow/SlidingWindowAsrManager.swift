@@ -349,7 +349,10 @@ public actor SlidingWindowAsrManager {
 
     /// Get an async stream of transcription updates
     public var transcriptionUpdates: AsyncStream<SlidingWindowTranscriptionUpdate> {
-        AsyncStream { continuation in
+        // Ordered callers subscribe after startOrderedStreaming. Each update
+        // contains a complete snapshot, so a slow UI only needs the newest one.
+        // Legacy consumers may accumulate individual confirmed segments.
+        AsyncStream(bufferingPolicy: orderedInputState == nil ? .unbounded : .bufferingNewest(1)) { continuation in
             self.updateContinuation = continuation
 
             continuation.onTermination = { @Sendable _ in
