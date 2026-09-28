@@ -328,7 +328,20 @@ extension VocabularyRescorer {
         tokenTimings: [TokenTiming],
         minSimilarity: Float = ContextBiasingConstants.minSimilarityFloor
     ) -> Bool {
-        Self.hasPotentialCtcTokenRescoreCandidate(
+        // Acoustic rescue intentionally considers terms outside the string
+        // similarity gate. It needs real CTC probabilities to decide, so a
+        // fused caller must not skip its head before that comparison runs.
+        if acousticRescueBlankId != nil, config.spotterRescueEnabled,
+            vocabulary.terms.count <= ContextBiasingConstants.largeVocabThreshold,
+            !transcript.isEmpty, !Self.preflightWords(from: tokenTimings).isEmpty,
+            vocabulary.terms.contains(where: {
+                $0.text.count >= vocabulary.minTermLength
+                    && !($0.ctcTokenIds ?? $0.tokenIds ?? []).isEmpty
+            })
+        {
+            return true
+        }
+        return Self.hasPotentialCtcTokenRescoreCandidate(
             vocabulary: vocabulary,
             transcript: transcript,
             tokenTimings: tokenTimings,
@@ -1212,12 +1225,13 @@ extension VocabularyRescorer {
         pendingReplacements: inout [PendingReplacement],
         candidateEvidence: inout CandidateEvidenceCollector?
     ) {
-        guard let spotter else { return }
-        let result = spotter.spotKeywordsFromLogProbs(
+        guard let acousticRescueBlankId else { return }
+        let result = CtcKeywordSpotter.scoreKeywordsFromLogProbs(
             logProbs: logProbs,
             frameDuration: frameDuration,
             customVocabulary: vocabulary,
-            minScore: Self.spotterRescueMinScore
+            minScore: Self.spotterRescueMinScore,
+            blankId: acousticRescueBlankId
         )
         guard !result.detections.isEmpty else { return }
 
