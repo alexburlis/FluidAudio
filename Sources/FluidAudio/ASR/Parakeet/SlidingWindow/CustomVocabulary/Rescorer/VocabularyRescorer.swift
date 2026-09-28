@@ -13,7 +13,7 @@ public struct VocabularyRescorer: Sendable {
 
     let logger = AppLogger(category: "VocabularyRescorer")
 
-    let spotter: CtcKeywordSpotter?
+    let acousticRescueBlankId: Int?
     let vocabulary: CustomVocabularyContext
     let ctcTokenizer: CtcTokenizer?
     let debugMode: Bool
@@ -197,6 +197,33 @@ public struct VocabularyRescorer: Sendable {
         )
     }
 
+    /// Create a fused-head rescorer with the same acoustic rescue policy as an
+    /// encoder-backed spotter, using only the supplied CTC log probabilities.
+    /// The caller must verify the loaded head and tokenizer share this blank ID.
+    /// No CTC acoustic encoder is loaded or retained by this factory.
+    public static func createForFusedCtc(
+        vocabulary: CustomVocabularyContext,
+        ctcModelDirectory: URL,
+        blankId: Int,
+        config: Config = .default
+    ) async throws -> VocabularyRescorer {
+        guard blankId >= 0 else {
+            throw ASRError.processingFailed("A fused CTC rescorer requires a valid blank token ID")
+        }
+        let tokenizer = try await CtcTokenizer.load(from: ctcModelDirectory)
+        let useBKTree = ContextBiasingConstants.useBkTree
+        return VocabularyRescorer(
+            spotter: nil,
+            vocabulary: vocabulary,
+            config: config,
+            ctcTokenizer: tokenizer,
+            useBKTree: useBKTree,
+            bkTree: useBKTree ? BKTree(terms: vocabulary.terms) : nil,
+            bkTreeMaxDistance: ContextBiasingConstants.bkTreeMaxDistance,
+            acousticRescueBlankId: blankId
+        )
+    }
+
     /// Private initializer for async factory
     private init(
         spotter: CtcKeywordSpotter?,
@@ -205,9 +232,10 @@ public struct VocabularyRescorer: Sendable {
         ctcTokenizer: CtcTokenizer,
         useBKTree: Bool,
         bkTree: BKTree?,
-        bkTreeMaxDistance: Int
+        bkTreeMaxDistance: Int,
+        acousticRescueBlankId: Int? = nil
     ) {
-        self.spotter = spotter
+        self.acousticRescueBlankId = spotter?.blankId ?? acousticRescueBlankId
         self.vocabulary = vocabulary
         self.config = config
         self.ctcTokenizer = ctcTokenizer
