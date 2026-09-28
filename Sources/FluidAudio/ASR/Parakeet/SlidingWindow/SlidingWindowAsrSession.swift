@@ -163,6 +163,8 @@ public enum SlidingWindowAsrError: LocalizedError {
     case audioConversionFailed(Error)
     case modelProcessingFailed(Error)
     case bufferOverflow
+    case invalidStreamState
+    case incompleteTranscription(failedWindows: Int)
     case invalidConfiguration(String)
 
     public var errorDescription: String? {
@@ -179,6 +181,10 @@ public enum SlidingWindowAsrError: LocalizedError {
             return "Model processing failed: \(error.localizedDescription)"
         case .bufferOverflow:
             return "Audio buffer overflow occurred"
+        case .invalidStreamState:
+            return "The streaming session is not accepting this operation"
+        case .incompleteTranscription(let failedWindows):
+            return "Transcription is incomplete because \(failedWindows) audio window(s) failed"
         case .invalidConfiguration(let message):
             return "Invalid configuration: \(message)"
         }
