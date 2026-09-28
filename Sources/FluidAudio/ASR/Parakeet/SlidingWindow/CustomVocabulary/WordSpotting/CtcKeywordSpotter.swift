@@ -194,6 +194,24 @@ public struct CtcKeywordSpotter: Sendable {
         customVocabulary: CustomVocabularyContext,
         minScore: Float? = nil
     ) -> SpotKeywordsResult {
+        Self.scoreKeywordsFromLogProbs(
+            logProbs: logProbs,
+            frameDuration: frameDuration,
+            customVocabulary: customVocabulary,
+            minScore: minScore,
+            blankId: blankId
+        )
+    }
+
+    /// Shared DP scoring for both encoder-backed and fused-head callers.
+    /// Requires no model handle because inference has already produced the input.
+    static func scoreKeywordsFromLogProbs(
+        logProbs: [[Float]],
+        frameDuration: Double,
+        customVocabulary: CustomVocabularyContext,
+        minScore: Float?,
+        blankId: Int
+    ) -> SpotKeywordsResult {
         let totalFrames = logProbs.count
         guard totalFrames > 0 else {
             return SpotKeywordsResult(detections: [], logProbs: [], frameDuration: 0, totalFrames: 0)
@@ -203,11 +221,6 @@ public struct CtcKeywordSpotter: Sendable {
 
         for term in customVocabulary.terms {
             guard term.text.count >= customVocabulary.minTermLength else {
-                if debugMode {
-                    logger.debug(
-                        "  Skipping '\(term.text)': too short (\(term.text.count) < \(customVocabulary.minTermLength) chars)"
-                    )
-                }
                 continue
             }
 
@@ -221,11 +234,12 @@ public struct CtcKeywordSpotter: Sendable {
                     return base - Float(extraTokens) * ContextBiasingConstants.thresholdRelaxationPerToken
                 } ?? ContextBiasingConstants.defaultMinSpotterScore
 
-            let multipleDetections = ctcWordSpotMultiple(
+            let multipleDetections = CtcDPAlgorithm.ctcWordSpotMultiple(
                 logProbs: logProbs,
                 keywordTokens: ids,
                 minScore: adjustedThreshold,
-                mergeOverlap: true
+                mergeOverlap: true,
+                blankId: blankId
             )
 
             for (score, start, end) in multipleDetections {
