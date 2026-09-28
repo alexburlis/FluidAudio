@@ -24,6 +24,25 @@ public actor SlidingWindowAsrManager {
     private var recognizerTask: Task<Void, Error>?
     private var audioSource: AudioSource = .microphone
 
+    // The ordered input API bypasses the legacy PCM AsyncStream entirely. One
+    // owned task is retained so cancel/finish can await the actual decoder owner.
+    private enum OrderedInputState: Equatable { case starting, running, finishing, finished, cancelled, failed }
+    private var orderedInputState: OrderedInputState?
+    private var orderedInputTask: Task<Void, Never>?
+    private var orderedFinishTask: Task<String, Error>?
+    private var orderedAcceptedSamples = 0
+    private var orderedProcessedSamples = 0
+    private var orderedInFlightSamples = 0
+    private var orderedHighWaterSamples = 0
+
+    /// Sample accounting for the awaited input API. Overlapping decoder context
+    /// does not count as newly accepted audio. Pending audio never exceeds one append.
+    public var orderedAudioProgress: SlidingWindowAudioProgress {
+        SlidingWindowAudioProgress(
+            acceptedSamples: orderedAcceptedSamples, processedSamples: orderedProcessedSamples,
+            inFlightSamples: orderedInFlightSamples, highWaterSamples: orderedHighWaterSamples)
+    }
+
     // Decoder state for this sliding window session
     private var decoderState: TdtDecoderState?
 
@@ -136,6 +155,7 @@ public actor SlidingWindowAsrManager {
     /// Load pre-loaded ASR models
     /// - Parameter models: Pre-loaded ASR models to use
     public func loadModels(_ models: AsrModels) async throws {
+        guard orderedInputState == nil else { throw SlidingWindowAsrError.invalidStreamState }
         logger.info("Loading SlidingWindowAsrManager with provided models")
 
         // Configure ASR manager with provided models
@@ -154,6 +174,7 @@ public actor SlidingWindowAsrManager {
     ///   (left + chunk + right context) exceeds the model's maximum input size,
     ///   `ASRError.notInitialized` if models are not loaded
     public func startStreaming(source: AudioSource = .microphone) async throws {
+        guard orderedInputState == nil else { throw SlidingWindowAsrError.invalidStreamState }
         try config.validate()
 
         guard asrManager != nil else {
@@ -213,9 +234,116 @@ public actor SlidingWindowAsrManager {
         logger.info("Sliding-window ASR engine started successfully")
     }
 
+    /// Start a single-use stream accepting owned, normalized 16 kHz mono samples.
+    /// Subscribe to `transcriptionUpdates` before feeding input. Unlike `streamAudio`,
+    /// each awaited append acknowledges decoder consumption and creates no PCM queue.
+    public func startOrderedStreaming(source: AudioSource = .microphone) async throws {
+        try config.validate()
+        guard orderedInputState == nil, recognizerTask == nil else {
+            throw SlidingWindowAsrError.invalidStreamState
+        }
+        guard asrManager != nil else { throw ASRError.notInitialized }
+        orderedInputState = .starting
+        audioSource = source
+        try await reset()
+        guard orderedInputState == .starting else { throw CancellationError() }
+        orderedInputState = .running
+    }
+
+    /// Append owned 16 kHz mono samples and wait until their ready windows finish.
+    /// Call sequentially from one consumer. Concurrent input or more than one model
+    /// window per call is rejected before acceptance; it is never queued or dropped.
+    public func appendAudioSamples(_ samples: [Float]) async throws {
+        try Task.checkCancellation()
+        guard orderedInputState == .running else {
+            if orderedInputState == .cancelled { throw CancellationError() }
+            throw SlidingWindowAsrError.invalidStreamState
+        }
+        guard orderedInputTask == nil else { throw SlidingWindowAsrError.bufferOverflow }
+        guard samples.count <= ASRConstants.maxModelSamples else { throw SlidingWindowAsrError.bufferOverflow }
+        guard samples.allSatisfy({ $0.isFinite }) else {
+            throw SlidingWindowAsrError.invalidConfiguration("Audio samples must be finite")
+        }
+        guard !samples.isEmpty else { return }
+        orderedAcceptedSamples += samples.count
+        orderedInFlightSamples = samples.count
+        orderedHighWaterSamples = max(orderedHighWaterSamples, samples.count)
+        let failuresBefore = failedWindowCount
+        let task = Task { await self.appendSamplesAndProcess(samples) }
+        orderedInputTask = task
+        await withTaskCancellationHandler {
+            await task.value
+        } onCancel: {
+            task.cancel()
+        }
+        orderedInputTask = nil
+        orderedInFlightSamples = 0
+        if Task.isCancelled || task.isCancelled || orderedInputState == .cancelled {
+            await cancel()
+            throw CancellationError()
+        }
+        guard failedWindowCount == failuresBefore else {
+            orderedInputState = .failed
+            updateContinuation?.finish()
+            throw SlidingWindowAsrError.incompleteTranscription(failedWindows: failedWindowCount)
+        }
+        orderedProcessedSamples += samples.count
+    }
+
+    /// Close input, await accepted work and the true final tail, and return once.
+    /// Any failed window makes completion fail visibly. Repeated calls share one
+    /// terminal task; cancellation cannot be returned as successful partial text.
+    public func finishOrderedStreaming() async throws -> String {
+        try Task.checkCancellation()
+        if orderedInputState == .cancelled { throw CancellationError() }
+        if let task = orderedFinishTask { return try await task.value }
+        guard orderedInputState == .running || orderedInputState == .failed else {
+            throw SlidingWindowAsrError.invalidStreamState
+        }
+        orderedInputState = .finishing
+        let inputTask = orderedInputTask
+        let task = Task { () throws -> String in
+            await inputTask?.value
+            try Task.checkCancellation()
+            await self.flushRemaining()
+            try Task.checkCancellation()
+            guard self.failedWindowCount == 0 else {
+                throw SlidingWindowAsrError.incompleteTranscription(failedWindows: self.failedWindowCount)
+            }
+            let text = await self.buildFinalTranscript()
+            try Task.checkCancellation()
+            self.orderedInputState = .finished
+            self.updateContinuation?.finish()
+            return text
+        }
+        orderedFinishTask = task
+        do {
+            return try await withTaskCancellationHandler {
+                try await task.value
+            } onCancel: {
+                task.cancel()
+            }
+        } catch {
+            if error is CancellationError {
+                await cancel()
+            } else {
+                orderedInputState = .failed
+                updateContinuation?.finish()
+            }
+            throw error
+        }
+    }
+
     /// Stream audio data for transcription
     /// - Parameter buffer: Audio buffer in any format (will be converted to 16kHz mono)
     public func streamAudio(_ buffer: AVAudioPCMBuffer) {
+        guard orderedInputState == nil else {
+            logger.error("PCM input is not accepted by an ordered sample stream")
+            failedWindowCount += 1
+            lastWindowError = .invalidStreamState
+            if orderedInputState == .running { orderedInputState = .failed }
+            return
+        }
         inputBuilder.yield(buffer)
     }
 
@@ -235,6 +363,7 @@ public actor SlidingWindowAsrManager {
     /// Finish streaming and get the final transcription
     /// - Returns: The complete transcription text
     public func finish() async throws -> String {
+        if orderedInputState != nil { return try await finishOrderedStreaming() }
         logger.info("Finishing sliding-window ASR...")
 
         // Signal end of input
@@ -263,6 +392,10 @@ public actor SlidingWindowAsrManager {
             )
         }
 
+        return await buildFinalTranscript()
+    }
+
+    private func buildFinalTranscript() async -> String {
         let finalText: String
         if vocabBoostingEnabled {
             // Text-based reconstruction preserves rescored corrections from processWindow().
@@ -290,6 +423,9 @@ public actor SlidingWindowAsrManager {
 
     /// Reset the transcriber for a new session
     public func reset() async throws {
+        guard orderedInputState == nil || orderedInputState == .starting else {
+            throw SlidingWindowAsrError.invalidStreamState
+        }
         volatileTranscript = ""
         confirmedTranscript = ""
         processedChunks = 0
@@ -326,9 +462,24 @@ public actor SlidingWindowAsrManager {
 
     /// Cancel streaming without getting results
     public func cancel() async {
+        if orderedInputState != nil { orderedInputState = .cancelled }
         inputBuilder.finish()
         recognizerTask?.cancel()
+        orderedInputTask?.cancel()
+        orderedFinishTask?.cancel()
         updateContinuation?.finish()
+        // Core ML calls may not stop immediately. Await their owner before clearing
+        // session state or allowing a caller to release/reuse the model lease.
+        _ = await recognizerTask?.result
+        await orderedInputTask?.value
+        _ = await orderedFinishTask?.result
+        orderedInputTask = nil
+        orderedInFlightSamples = 0
+        sampleBuffer.removeAll()
+        accumulatedTokens.removeAll()
+        accumulatedTokenTimestamps.removeAll()
+        volatileTranscript = ""
+        confirmedTranscript = ""
 
         logger.info("SlidingWindowAsrManager cancelled")
     }
@@ -342,6 +493,7 @@ public actor SlidingWindowAsrManager {
 
     /// Append new samples and process as many windows as available
     private func appendSamplesAndProcess(_ samples: [Float]) async {
+        guard !Task.isCancelled else { return }
         // Append samples to buffer
         sampleBuffer.append(contentsOf: samples)
 
@@ -353,6 +505,7 @@ public actor SlidingWindowAsrManager {
 
         var currentAbsEnd = bufferStartIndex + sampleBuffer.count
         while currentAbsEnd >= (nextWindowCenterStart + chunk + right) {
+            guard !Task.isCancelled else { return }
             let leftStartAbs = max(0, nextWindowCenterStart - left)
             let rightEndAbs = nextWindowCenterStart + chunk + right
             let startIdx = max(leftStartAbs - bufferStartIndex, 0)
@@ -388,6 +541,7 @@ public actor SlidingWindowAsrManager {
 
         var currentAbsEnd = bufferStartIndex + sampleBuffer.count
         while currentAbsEnd > nextWindowCenterStart {  // process until we exhaust
+            guard !Task.isCancelled else { return }
             // If we have less than a chunk ahead, process the final partial chunk
             let availableAhead = currentAbsEnd - nextWindowCenterStart
             if availableAhead <= 0 { break }
@@ -457,6 +611,7 @@ public actor SlidingWindowAsrManager {
                 )
             else { return }
 
+            try Task.checkCancellation()
             // Update stored decoder state
             self.decoderState = state
 
@@ -469,6 +624,7 @@ public actor SlidingWindowAsrManager {
                 accumulatedTokens.removeLast(droppedPreviousTokens)
                 accumulatedTokenTimestamps.removeLast(min(droppedPreviousTokens, accumulatedTokenTimestamps.count))
                 if let droppedText = await asrManager?.convertTokensToText(dropped), !droppedText.isEmpty {
+                    try Task.checkCancellation()
                     // The text state may hold a vocabulary-rescored replacement
                     // for that word rather than its raw token text.
                     let candidates = [droppedText] + (lastWindowRenderedLastWord.map { [$0] } ?? [])
@@ -505,6 +661,7 @@ public actor SlidingWindowAsrManager {
                 )
             else { return }
 
+            try Task.checkCancellation()
             // Update state only after all required async calls complete successfully
             accumulatedTokens.append(contentsOf: tokens)
             // Keep global timestamps aligned 1:1 with accumulatedTokens for #787 dedup.
@@ -568,7 +725,9 @@ public actor SlidingWindowAsrManager {
                 )
             }
 
+            try Task.checkCancellation()
             await updateTranscriptionState(with: displayResult, shouldConfirm: shouldConfirm)
+            try Task.checkCancellation()
             lastWindowRenderedLastWord = Self.renderedLastWord(
                 rawText: interim.text, renderedText: displayResult.text, replacements: appliedReplacements)
 
@@ -580,7 +739,9 @@ public actor SlidingWindowAsrManager {
                 tokenIds: tokens,
                 tokenTimings: displayResult.tokenTimings ?? [],
                 ctcDetectedTerms: displayResult.ctcDetectedTerms,
-                ctcAppliedTerms: displayResult.ctcAppliedTerms
+                ctcAppliedTerms: displayResult.ctcAppliedTerms,
+                confirmedTranscript: confirmedTranscript,
+                volatileTranscript: volatileTranscript
             )
 
             updateContinuation?.yield(update)
@@ -602,6 +763,7 @@ public actor SlidingWindowAsrManager {
     }
 
     private func updateTranscriptionState(with result: ASRResult, shouldConfirm: Bool) async {
+        guard !Task.isCancelled else { return }
         let totalAudioProcessed = Double(bufferStartIndex + sampleBuffer.count) / 16000.0
 
         if shouldConfirm {
@@ -734,6 +896,9 @@ public actor SlidingWindowAsrManager {
 
             case .bufferOverflow:
                 logger.info("Buffer overflow handled automatically")
+
+            case .invalidStreamState, .incompleteTranscription:
+                logger.error("Stream cannot return a complete transcript")
 
             case .invalidConfiguration:
                 logger.error("Configuration error cannot be recovered automatically")
@@ -910,6 +1075,17 @@ public struct SlidingWindowAsrConfig: Sendable {
     ///   `leftContextSeconds + chunkSeconds + rightContextSeconds` exceeds the
     ///   model's maximum input (`ASRConstants.maxModelSamples`, 15 s at 16 kHz).
     public func validate() throws {
+        guard chunkSeconds.isFinite, chunkSeconds > 0,
+            leftContextSeconds.isFinite, leftContextSeconds >= 0,
+            rightContextSeconds.isFinite, rightContextSeconds >= 0,
+            chunkSeconds <= 15, leftContextSeconds <= 15, rightContextSeconds <= 15
+        else {
+            throw SlidingWindowAsrError.invalidConfiguration(
+                "Window durations must be finite, positive, and within 15 seconds")
+        }
+        guard chunkSamples > 0 else {
+            throw SlidingWindowAsrError.invalidConfiguration("A chunk must contain at least one sample")
+        }
         guard windowSamples <= ASRConstants.maxModelSamples else {
             let windowSeconds = leftContextSeconds + chunkSeconds + rightContextSeconds
             let maxSeconds = Double(ASRConstants.maxModelSamples) / 16000.0
@@ -925,6 +1101,14 @@ public struct SlidingWindowAsrConfig: Sendable {
     var chunkDuration: TimeInterval { chunkSeconds }
     var bufferCapacity: Int { Int(15.0 * 16000) }
     var chunkSizeInSamples: Int { chunkSamples }
+}
+
+/// Sample accounting for a single ordered streaming session.
+public struct SlidingWindowAudioProgress: Sendable {
+    public let acceptedSamples: Int
+    public let processedSamples: Int
+    public let inFlightSamples: Int
+    public let highWaterSamples: Int
 }
 
 /// Transcription update from sliding-window ASR
@@ -960,6 +1144,11 @@ public struct SlidingWindowTranscriptionUpdate: Sendable {
     /// Vocabulary terms applied as replacements in this window's text.
     public let ctcAppliedTerms: [String]?
 
+    /// Complete display state captured atomically with this update. Optional for
+    /// compatibility with updates manually constructed by existing clients.
+    public let confirmedTranscript: String?
+    public let volatileTranscript: String?
+
     public init(
         text: String,
         isConfirmed: Bool,
@@ -968,7 +1157,9 @@ public struct SlidingWindowTranscriptionUpdate: Sendable {
         tokenIds: [Int] = [],
         tokenTimings: [TokenTiming] = [],
         ctcDetectedTerms: [String]? = nil,
-        ctcAppliedTerms: [String]? = nil
+        ctcAppliedTerms: [String]? = nil,
+        confirmedTranscript: String? = nil,
+        volatileTranscript: String? = nil
     ) {
         self.text = text
         self.isConfirmed = isConfirmed
@@ -978,5 +1169,7 @@ public struct SlidingWindowTranscriptionUpdate: Sendable {
         self.tokenTimings = tokenTimings
         self.ctcDetectedTerms = ctcDetectedTerms
         self.ctcAppliedTerms = ctcAppliedTerms
+        self.confirmedTranscript = confirmedTranscript
+        self.volatileTranscript = volatileTranscript
     }
 }

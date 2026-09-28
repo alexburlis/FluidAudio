@@ -39,7 +39,7 @@ final class SlidingWindowFinalWindowRegressionTests: XCTestCase {
 
     private func loadModels() async throws -> AsrModels {
         if let directory = ProcessInfo.processInfo.environment["FLUIDAUDIO_TEST_ASR_MODELS"] {
-            return try await AsrModels.load(from: URL(fileURLWithPath: directory), version: .v3)
+            return try AsrModels.loadLocal(from: URL(fileURLWithPath: directory), version: .v3)
         }
         let cacheDir = AsrModels.defaultCacheDirectory()
         let cached = AsrModels.modelsExist(at: cacheDir)
@@ -47,6 +47,7 @@ final class SlidingWindowFinalWindowRegressionTests: XCTestCase {
         try XCTSkipUnless(
             cached || allowDownload,
             "Parakeet v3 models not cached; set FLUIDAUDIO_RUN_ASR_E2E=1 to download")
+        if cached { return try AsrModels.loadLocal(from: cacheDir, version: .v3) }
         return try await AsrModels.downloadAndLoad()
     }
 
