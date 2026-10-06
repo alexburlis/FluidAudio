@@ -26,7 +26,7 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v5
 
-      - uses: swift-actions/setup-swift@v2
+      - uses: swift-actions/setup-swift@v3.0.0-beta.1
         with:
           swift-version: "6.4"
 
