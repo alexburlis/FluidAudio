@@ -25,7 +25,7 @@ jobs:
           swift-version: "6.1"
 
       - name: Cache Swift packages and build
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: |
             .build
@@ -33,19 +33,19 @@ jobs:
           key: ${{ runner.os }}-sortformer-${{ hashFiles('Package.swift') }}
 
       - name: Cache Sortformer models
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: ~/Library/Application Support/FluidAudio/Models/diar-streaming-sortformer-coreml
           key: ${{ runner.os }}-sortformer-models-high-latency-${{ hashFiles('Sources/FluidAudio/Shared/Download/**') }}
 
       - name: Cache AMI dataset
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: ~/FluidAudioDatasets/ami_official
           key: ${{ runner.os }}-ami-dataset
 
       - name: Cache AMI annotations
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: Datasets/ami_public_1.6.2
           key: ${{ runner.os }}-ami-annotations-1.6.2
