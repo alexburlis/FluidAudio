@@ -42,7 +42,7 @@ jobs:
       CHUNK_MS: ${{ github.event.inputs.chunk_ms || '2240' }}
 
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
 
       - uses: swift-actions/setup-swift@v2
         with:

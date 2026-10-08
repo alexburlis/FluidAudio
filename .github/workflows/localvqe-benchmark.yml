@@ -39,7 +39,7 @@ jobs:
     runs-on: macos-15
     timeout-minutes: 30
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
       - name: Swift scorer / dataset / registry tests
         run: swift test --filter 'EnhanceBenchmark|WERCalculatorTests|ModelRegistryTests'
       - name: Python verifier tests
@@ -54,7 +54,7 @@ jobs:
       matrix:
         shard: [0, 1, 2, 3, 4]
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
 
       - name: Record environment
         run: |
@@ -92,7 +92,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
 
       - name: Download shard reports
         uses: actions/download-artifact@v4
