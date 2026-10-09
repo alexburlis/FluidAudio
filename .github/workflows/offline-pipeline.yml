@@ -108,7 +108,7 @@ jobs:
 
       - name: Comment PR with Offline Pipeline Results
         if: always()
-        uses: actions/github-script@v7
+        uses: actions/github-script@v9
         with:
           script: |
             const der = parseFloat('${{ steps.extract.outputs.DER }}');

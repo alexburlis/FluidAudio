@@ -132,7 +132,7 @@ jobs:
         # Only comment when metrics were actually extracted — a failed run must
         # show up as a red check, not a comment with garbage numbers (issue #752)
         if: steps.extract.outcome == 'success'
-        uses: actions/github-script@v7
+        uses: actions/github-script@v9
         with:
           script: |
             const der = parseFloat('${{ steps.extract.outputs.DER }}');
