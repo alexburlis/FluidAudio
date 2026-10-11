@@ -11,7 +11,7 @@ concurrency:
 jobs:
   benchmark:
     name: Sortformer High-Latency ES2004a
-    runs-on: macos-15
+    runs-on: macos-26
     permissions:
       contents: read
       pull-requests: write

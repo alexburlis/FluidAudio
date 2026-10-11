@@ -36,7 +36,7 @@ env:
 jobs:
   regressions:
     name: Scoring and manifest regressions
-    runs-on: macos-15
+    runs-on: macos-26
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@v5
@@ -47,7 +47,7 @@ jobs:
 
   shard:
     name: Score shard ${{ matrix.shard }}
-    runs-on: macos-15
+    runs-on: macos-26
     timeout-minutes: 60
     strategy:
       fail-fast: false

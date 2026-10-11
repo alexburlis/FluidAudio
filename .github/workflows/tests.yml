@@ -11,7 +11,7 @@ concurrency:
 jobs:
   build-and-test-macos:
     name: Build and Test Swift Package (macOS)
-    runs-on: macos-15
+    runs-on: macos-26
     steps:
       - name: Checkout code
         uses: actions/checkout@v5
@@ -36,7 +36,7 @@ jobs:
 
   build-without-nemo-text-processing:
     name: Build without NemoTextProcessing trait (macOS)
-    runs-on: macos-15
+    runs-on: macos-26
     steps:
       - name: Checkout code
         uses: actions/checkout@v5
@@ -71,7 +71,7 @@ jobs:
 
   build-macos-x86_64:
     name: Build Swift Package (macOS x86_64 cross-compile)
-    runs-on: macos-15
+    runs-on: macos-26
     steps:
       - name: Checkout code
         uses: actions/checkout@v5
@@ -83,7 +83,7 @@ jobs:
 
   build-ios:
     name: Build (iOS)
-    runs-on: macos-15
+    runs-on: macos-26
 
     steps:
       - name: Checkout code

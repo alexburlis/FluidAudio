@@ -8,7 +8,7 @@ on:
 jobs:
   supertonic3-smoke-test:
     name: Supertonic3 Smoke Test
-    runs-on: macos-15
+    runs-on: macos-26
     permissions:
       contents: read
       pull-requests: write

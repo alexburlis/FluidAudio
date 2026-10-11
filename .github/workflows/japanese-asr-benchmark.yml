@@ -22,7 +22,7 @@ on:
 jobs:
   japanese-asr-benchmark:
     name: Japanese ASR Benchmark (CTC)
-    runs-on: macos-15
+    runs-on: macos-26
     permissions:
       contents: read
       pull-requests: write
