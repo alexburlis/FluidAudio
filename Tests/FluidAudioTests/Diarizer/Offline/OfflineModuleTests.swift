@@ -311,7 +311,9 @@ final class SpeakerActivityExposureTests: XCTestCase {
         XCTAssertEqual(segmentShapes(output.segments), ["S1|0.0|2.0"])
     }
 
-    private func shortTurnOutput(embeddingMinimum: Double, activityMinimum: Double) -> OfflineReconstruction.SegmentOutputs {
+    private func shortTurnOutput(
+        embeddingMinimum: Double, activityMinimum: Double
+    ) -> OfflineReconstruction.SegmentOutputs {
         var config = OfflineDiarizerConfig(
             minSegmentDuration: embeddingMinimum,
             minGapDuration: 0.1,
@@ -373,14 +375,18 @@ final class SpeakerActivityExposureTests: XCTestCase {
             speakerActivitySegments: output.speakerActivitySegments
         )
 
-        XCTAssertEqual(segmentShapes(result.segments), [
-            "S1|0.0|2.0",
-            "S2|2.0|3.0",
-        ])
-        XCTAssertEqual(segmentShapes(result.speakerActivitySegments), [
-            "S1|0.0|2.0",
-            "S2|1.0|3.0",
-        ])
+        XCTAssertEqual(
+            segmentShapes(result.segments),
+            [
+                "S1|0.0|2.0",
+                "S2|2.0|3.0",
+            ])
+        XCTAssertEqual(
+            segmentShapes(result.speakerActivitySegments),
+            [
+                "S1|0.0|2.0",
+                "S2|1.0|3.0",
+            ])
     }
 
     private func segmentShapes(_ segments: [TimedSpeakerSegment]) -> [String] {
