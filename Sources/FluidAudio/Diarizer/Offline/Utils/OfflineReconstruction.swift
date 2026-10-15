@@ -403,7 +403,8 @@ struct OfflineReconstruction {
             }
 
             let duration = adjustedEnd - adjustedStart
-            let minimum = config.useSpeechComponentEmbeddings
+            let minimum =
+                config.useSpeechComponentEmbeddings
                 ? config.segmentationMinDurationOn : config.minSegmentDuration
             if duration < Float(minimum) {
                 continue
@@ -511,9 +512,10 @@ struct OfflineReconstruction {
         var ordered = segments.sorted { $0.startTimeSeconds < $1.startTimeSeconds }
         // Embedding mask selection does not set the lifetime of a labelled turn.
         // Short acknowledgements already have a speaker and must keep that label.
-        let minimumDuration = Float(config.useSpeechComponentEmbeddings
-            ? config.segmentationMinDurationOn
-            : max(config.minSegmentDuration, config.segmentationMinDurationOn))
+        let minimumDuration = Float(
+            config.useSpeechComponentEmbeddings
+                ? config.segmentationMinDurationOn
+                : max(config.minSegmentDuration, config.segmentationMinDurationOn))
         ordered = ordered.filter {
             ($0.endTimeSeconds - $0.startTimeSeconds) >= minimumDuration
         }

@@ -359,7 +359,8 @@ public final class OfflineDiarizerManager {
         let rhoFeatures = timedEmbeddings.map { $0.rho128 }
 
         let clusteringStart = Date()
-        let trainingIndices = prepared.componentTraining?.indices
+        let trainingIndices =
+            prepared.componentTraining?.indices
             ?? selectTrainingEmbeddings(timedEmbeddings: timedEmbeddings)
 
         let trainingEmbeddings = trainingIndices.map { embeddingFeatures[$0] }

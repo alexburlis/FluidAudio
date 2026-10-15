@@ -189,7 +189,8 @@ struct OfflineSegmentationProcessor {
         var processedAnyBatch = false
         // The component model follows the source model's full windows plus one
         // partial tail. Repeated mostly padded tails overweight the last voice.
-        let offsetLimit = config.useSpeechComponentEmbeddings
+        let offsetLimit =
+            config.useSpeechComponentEmbeddings
             ? max(1, totalSamples - chunkSize + stepSize) : totalSamples
         var offsetIterator = stride(from: 0, to: offsetLimit, by: stepSize).makeIterator()
         var batchOffsets: [Int] = []
@@ -287,7 +288,8 @@ struct OfflineSegmentationProcessor {
                 )
             }
 
-            frameDuration = config.useSpeechComponentEmbeddings
+            frameDuration =
+                config.useSpeechComponentEmbeddings
                 ? 270.0 / 16_000.0 : config.windowDuration / Double(frames)
             numFrames = frames
 

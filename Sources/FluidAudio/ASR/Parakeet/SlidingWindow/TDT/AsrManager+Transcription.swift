@@ -52,11 +52,13 @@ extension AsrManager {
             forVocabSize: customVocabulary.terms.count
         )
         let minSimilarity = max(rescorerConfig.minSimilarity, customVocabulary.minSimilarity)
-        guard vocabularyRescorer.hasPotentialCtcTokenRescoreCandidate(
-            transcript: result.text,
-            tokenTimings: tokenTimings,
-            minSimilarity: minSimilarity
-        ) else {
+        guard
+            vocabularyRescorer.hasPotentialCtcTokenRescoreCandidate(
+                transcript: result.text,
+                tokenTimings: tokenTimings,
+                minSimilarity: minSimilarity
+            )
+        else {
             return result
         }
         guard let encoderOutput else {

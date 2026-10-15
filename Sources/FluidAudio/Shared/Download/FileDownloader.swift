@@ -54,7 +54,8 @@ enum FileDownloader {
 
         private func cancelWaiter(_ waiterID: UUID, for destination: String) {
             guard var destinationWaiters = waiters[destination],
-                  let index = destinationWaiters.firstIndex(where: { $0.id == waiterID }) else {
+                let index = destinationWaiters.firstIndex(where: { $0.id == waiterID })
+            else {
                 return
             }
             let waiter = destinationWaiters.remove(at: index)
