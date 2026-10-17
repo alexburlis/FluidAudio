@@ -131,7 +131,7 @@ final class SubdirectoryDownloadTests: XCTestCase {
         let existing = workDir.appendingPathComponent("pack/file0.bin")
         try FileManager.default.createDirectory(
             at: existing.deletingLastPathComponent(), withIntermediateDirectories: true)
-        let localContent = Data("local-content".utf8)
+        let localContent = Data("local-content-16".utf8)
         try localContent.write(to: existing)
 
         try await ModelHub.download(

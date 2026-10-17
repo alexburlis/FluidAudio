@@ -152,6 +152,25 @@ final class ModelCacheCompletenessTests: XCTestCase {
 
     // MARK: - SenseVoice / Paraformer public gates
 
+    func testParakeetModelsExistRejectsInterruptedDownloadBeforeNativeLoading() throws {
+        let originalPath = try XCTUnwrap(repoPath)
+        defer { repoPath = originalPath }
+        repoPath = originalPath.appendingPathComponent(Repo.parakeetV3.folderName)
+        try FileManager.default.createDirectory(at: repoPath, withIntermediateDirectories: true)
+        for name in ModelNames.ASR.requiredModelsV3() {
+            try makeBundle(name, partialWeights: name == ModelNames.ASR.encoderFile)
+        }
+        try makeFile(ModelNames.ASR.vocabularyFile)
+
+        XCTAssertFalse(AsrModels.modelsExist(at: repoPath, version: .v3))
+
+        let encoder = repoPath.appendingPathComponent(ModelNames.ASR.encoderFile)
+        try FileManager.default.moveItem(
+            at: encoder.appendingPathComponent("weights/weight.bin.partial"),
+            to: encoder.appendingPathComponent("weights/weight.bin"))
+        XCTAssertTrue(AsrModels.modelsExist(at: repoPath, version: .v3))
+    }
+
     func testSenseVoiceModelsExistRejectsInterruptedDownload() throws {
         try makeBundle(ModelNames.SenseVoice.preprocessorFile)
         try makeBundle(

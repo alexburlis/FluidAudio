@@ -221,7 +221,19 @@ enum FileDownloader {
         onBytes: (@Sendable (Int64, Int64) -> Void)?
     ) async throws -> Outcome {
         if FileManager.default.fileExists(atPath: destination.path) {
-            return .alreadyPresent
+            let attributes = try FileManager.default.attributesOfItem(atPath: destination.path)
+            guard attributes[.type] as? FileAttributeType == .typeRegular else {
+                throw CocoaError(.fileReadCorruptFile, userInfo: [NSFilePathErrorKey: destination.path])
+            }
+            if file.size == 0 { return .alreadyPresent }
+            do {
+                try validateDownloadedArtifact(
+                    at: destination, response: nil, path: file.path, expectedSize: file.size)
+                return .alreadyPresent
+            } catch {
+                logger.warning(
+                    "Cached artifact failed validation: \(error.localizedDescription). Downloading replacement.")
+            }
         }
 
         let parentDir = destination.deletingLastPathComponent()
@@ -255,9 +267,13 @@ enum FileDownloader {
         )
 
         if FileManager.default.fileExists(atPath: destination.path) {
-            try? FileManager.default.removeItem(at: destination)
+            // Keep the original until a complete, validated replacement exists.
+            // Use the replacement's metadata instead of the corrupt file's timestamps.
+            _ = try FileManager.default.replaceItemAt(
+                destination, withItemAt: tempURL, options: .usingNewMetadataOnly)
+        } else {
+            try FileManager.default.moveItem(at: tempURL, to: destination)
         }
-        try FileManager.default.moveItem(at: tempURL, to: destination)
         return .downloaded
     }
 

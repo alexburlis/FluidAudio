@@ -72,6 +72,58 @@ final class DownloadResumeTests: XCTestCase {
 
     // MARK: - Tests
 
+    func testEnsureRepairsInvalidExistingArtifacts() async throws {
+        let originalBaseURL = ModelRegistry.baseURL
+        ModelRegistry.baseURL = "https://stub.test"
+        defer { ModelRegistry.baseURL = originalBaseURL }
+        let badArtifacts = [
+            Data(),
+            Data(Self.fullBody.prefix(4)),
+            Data("<html>".utf8) + Data(repeating: 32, count: Self.fullBody.count - 6),
+        ]
+
+        for (index, original) in badArtifacts.enumerated() {
+            let name = "repair-\(index).bin"
+            let destination = workDir.appendingPathComponent(name)
+            try original.write(to: destination)
+            ResumeStubURLProtocol.enqueue(
+                .init(status: 200, headers: ["ETag": "\"v1\""], chunks: [Self.fullBody]))
+
+            let outcome = try await FileDownloader.ensure(
+                file: RemoteFile(path: name, size: Self.fullBody.count),
+                from: "repo", at: destination, recoveringBlockedPaths: false,
+                configuration: stubConfiguration)
+
+            XCTAssertEqual(try Data(contentsOf: destination), Self.fullBody)
+            guard case .downloaded = outcome else {
+                XCTFail("An invalid cached artifact must be replaced with a validated download")
+                continue
+            }
+        }
+        XCTAssertEqual(ResumeStubURLProtocol.recordedRequests().count, badArtifacts.count)
+    }
+
+    func testFailedCacheRepairPreservesOriginalArtifact() async throws {
+        let destination = workDir.appendingPathComponent("repair-failure.bin")
+        let original = Data(Self.fullBody.prefix(4))
+        try original.write(to: destination)
+        let originalBaseURL = ModelRegistry.baseURL
+        ModelRegistry.baseURL = "https://stub.test"
+        defer { ModelRegistry.baseURL = originalBaseURL }
+        ResumeStubURLProtocol.enqueue(.init(status: 404, headers: [:], chunks: []))
+
+        do {
+            _ = try await FileDownloader.ensure(
+                file: RemoteFile(path: "repair-failure.bin", size: Self.fullBody.count),
+                from: "repo", at: destination, recoveringBlockedPaths: false,
+                configuration: stubConfiguration)
+            XCTFail("A failed replacement download must remain a visible failure")
+        } catch {
+            XCTAssertEqual(try Data(contentsOf: destination), original)
+        }
+        XCTAssertEqual(ResumeStubURLProtocol.recordedRequests().count, 1)
+    }
+
     func testFreshDownloadWritesFullBody() async throws {
         ResumeStubURLProtocol.enqueue(
             .init(status: 200, headers: ["ETag": "\"v1\""], chunks: [Self.fullBody]))
