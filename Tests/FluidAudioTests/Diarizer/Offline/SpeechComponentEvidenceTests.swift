@@ -43,6 +43,16 @@ final class SpeechComponentEvidenceTests: XCTestCase {
         XCTAssertEqual(values, (0..<200).map { $0 * 3 })
     }
 
+    func testOrderedParallelMapKeepsOptionalResultsInPlace() async throws {
+        // Component embeddings are `[Float]?`: a missing identity must stay at its index.
+        let values = try await OfflineSpeechComponentExtractor.orderedParallelMap(
+            count: 6, maxConcurrency: 3
+        ) { index -> [Float]? in
+            index.isMultiple(of: 2) ? [Float(index)] : nil
+        }
+        XCTAssertEqual(values, [[0], nil, [2], nil, [4], nil])
+    }
+
     func testOrderedParallelMapRethrowsAFailure() async {
         struct Failure: Error {}
         do {
