@@ -60,8 +60,7 @@ struct OfflineSpeechComponentExtractor {
             repeating: Array(repeating: Array(repeating: Float.zero, count: slotCount), count: 589),
             count: segmentation.numChunks
         )
-        var validComponents: [Component] = []
-        var rawEmbeddings: [[Float]] = []
+        var embeddable: [Component] = []
         for component in components {
             try Task.checkCancellation()
             for frame in component.activeFrames { weights[component.chunk][frame][component.slot] = 1 }
@@ -72,9 +71,23 @@ struct OfflineSpeechComponentExtractor {
                 component.sampleRange.count >= 560,
                 component.cleanMask.contains(1)
             else { continue }
-            let raw = try autoreleasepool {
-                try embed(component, audioSource: audioSource, fbank: models.fbankModel, embedding: embeddingModel)
+            embeddable.append(component)
+        }
+        // Each component is an independent CPU prediction, and one at a time left all but
+        // one core idle (about 1 core busy for 55-65% of a Meeting's processing). Results
+        // come back in component order, so everything downstream sees the same sequence.
+        let fbankModel = models.fbankModel
+        let candidates = embeddable
+        let embedded = try await orderedParallelMap(
+            count: candidates.count, maxConcurrency: componentEmbeddingConcurrency
+        ) { index in
+            try autoreleasepool {
+                try embed(candidates[index], audioSource: audioSource, fbank: fbankModel, embedding: embeddingModel)
             }
+        }
+        var validComponents: [Component] = []
+        var rawEmbeddings: [[Float]] = []
+        for (component, raw) in zip(candidates, embedded) {
             if let raw {
                 validComponents.append(component)
                 rawEmbeddings.append(raw)
@@ -135,6 +148,45 @@ struct OfflineSpeechComponentExtractor {
                 minimumSharedSamples: Int(ceil(Double(config.embedding.minimumActiveRatio) * 589)) * 270
             )
         )
+    }
+
+    /// The component model runs on CPU with a variable-length input. Leave two cores for
+    /// the other track's segmentation, ASR and the UI.
+    static var componentEmbeddingConcurrency: Int {
+        max(1, min(8, ProcessInfo.processInfo.activeProcessorCount - 2))
+    }
+
+    /// Runs `transform` for every index with at most `maxConcurrency` in flight and returns
+    /// the results in index order, exactly as a sequential loop would.
+    static func orderedParallelMap<T: Sendable>(
+        count: Int,
+        maxConcurrency: Int,
+        _ transform: @escaping @Sendable (Int) throws -> T
+    ) async throws -> [T] {
+        guard count > 0 else { return [] }
+        let lanes = max(1, min(maxConcurrency, count))
+        return try await withThrowingTaskGroup(of: (Int, T).self) { group in
+            var results = [T?](repeating: nil, count: count)
+            var next = 0
+            func enqueue() {
+                let index = next
+                next += 1
+                group.addTask {
+                    try Task.checkCancellation()
+                    return (index, try transform(index))
+                }
+            }
+            for _ in 0..<lanes { enqueue() }
+            while let (index, value) = try await group.next() {
+                results[index] = value
+                if next < count { enqueue() }
+            }
+            let ordered = results.compactMap { $0 }
+            guard ordered.count == count else {
+                throw OfflineDiarizationError.processingFailed("A parallel component embedding returned no result")
+            }
+            return ordered
+        }
     }
 
     private static func splitComponents(
