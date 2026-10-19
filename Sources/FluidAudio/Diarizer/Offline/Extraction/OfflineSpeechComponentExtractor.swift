@@ -1,12 +1,13 @@
 import Accelerate
 @preconcurrency import CoreML
 import Foundation
+import os
 
 /// The Community-1 speech-component path. Segmentation activity is retained even
 /// when a component has no usable acoustic identity (overlap or a padded tail).
 @available(macOS 14.0, iOS 17.0, *)
 struct OfflineSpeechComponentExtractor {
-    private struct Component {
+    private struct Component: Equatable {
         let chunk: Int
         let slot: Int
         let activeFrames: [Int]
@@ -42,18 +43,51 @@ struct OfflineSpeechComponentExtractor {
         let total =
             audioSource.sampleCount < 160_000
             ? 1 : full + (audioSource.sampleCount % 16_000 == 0 ? 0 : 1)
-        let segmentation = try await OfflineSegmentationProcessor().process(
-            audioSource: audioSource, segmentationModel: models.segmentationModel, config: config,
-            chunkHandler: { chunk in
-                progressCallback?(chunk.chunkIndex + 1, total)
-                return .continue
+        // Segmentation runs mostly on the Neural Engine and each component embedding is an
+        // independent CPU prediction, so a chunk's components start embedding as soon as the
+        // chunk is segmented, with up to `componentEmbeddingConcurrency` predictions in flight.
+        // Results come back in component order, so everything downstream sees the same sequence.
+        let fbankModel = models.fbankModel
+        let sampleCount = audioSource.sampleCount
+        // The chunk handler cannot throw: it keeps the failure and stops emitting chunks.
+        let splitFailure = OSAllocatedUnfairLock<Error?>(initialState: nil)
+        let (produced, streamed) = try await orderedStreamingMap(
+            maxConcurrency: componentEmbeddingConcurrency,
+            produce: { emit in
+                let segmentation = try await OfflineSegmentationProcessor().process(
+                    audioSource: audioSource, segmentationModel: models.segmentationModel, config: config,
+                    chunkHandler: { chunk in
+                        progressCallback?(chunk.chunkIndex + 1, total)
+                        do {
+                            let components = try splitComponents(
+                                chunk: chunk.chunkIndex, masks: chunk.speakerWeights,
+                                offsetSeconds: chunk.chunkOffsetSeconds, frameDuration: chunk.frameDuration,
+                                config: config)
+                            for component in components where isEmbeddable(component, sampleCount: sampleCount) {
+                                emit(component)
+                            }
+                            return .continue
+                        } catch {
+                            splitFailure.withLock { $0 = error }
+                            return .stop
+                        }
+                    }
+                )
+                if let failure = splitFailure.withLock({ $0 }) { throw failure }
+                return (segmentation: segmentation, end: Date())
+            },
+            transform: { (component: Component) in
+                let raw = try autoreleasepool {
+                    try embed(component, audioSource: audioSource, fbank: fbankModel, embedding: embeddingModel)
+                }
+                return (component: component, raw: raw)
             }
         )
+        let segmentation = produced.segmentation
         guard segmentation.numFrames == 589, segmentation.numSpeakers == 3 else {
             throw OfflineDiarizationError.processingFailed("Unexpected Community-1 segmentation geometry")
         }
-        let segmentationSeconds = Date().timeIntervalSince(start)
-        let extractionStart = Date()
+        let segmentationSeconds = produced.end.timeIntervalSince(start)
         let components = try splitComponents(segmentation, config: config)
         let slotCount = max(1, components.map { $0.slot + 1 }.max() ?? 0)
         var weights = Array(
@@ -64,30 +98,18 @@ struct OfflineSpeechComponentExtractor {
         for component in components {
             try Task.checkCancellation()
             for frame in component.activeFrames { weights[component.chunk][frame][component.slot] = 1 }
-            // No arbitrary minimum turn length: only complete real FBank frames
-            // and at least one clean pooling weight can produce an identity.
-            guard component.sampleRange.lowerBound >= 0,
-                component.sampleRange.upperBound <= audioSource.sampleCount,
-                component.sampleRange.count >= 560,
-                component.cleanMask.contains(1)
-            else { continue }
+            guard isEmbeddable(component, sampleCount: sampleCount) else { continue }
             embeddable.append(component)
         }
-        // Each component is an independent CPU prediction, and one at a time left all but
-        // one core idle (about 1 core busy for 55-65% of a Meeting's processing). Results
-        // come back in component order, so everything downstream sees the same sequence.
-        let fbankModel = models.fbankModel
-        let candidates = embeddable
-        let embedded = try await orderedParallelMap(
-            count: candidates.count, maxConcurrency: componentEmbeddingConcurrency
-        ) { index in
-            try autoreleasepool {
-                try embed(candidates[index], audioSource: audioSource, fbank: fbankModel, embedding: embeddingModel)
-            }
+        // The streamed embeddings are valid only for exactly these components, in this order.
+        guard streamed.map({ $0.component }) == embeddable else {
+            throw OfflineDiarizationError.processingFailed(
+                "Streamed speech components differ from the finished segmentation")
         }
+        let embedded = streamed.map { $0.raw }
         var validComponents: [Component] = []
         var rawEmbeddings: [[Float]] = []
-        for (component, raw) in zip(candidates, embedded) {
+        for (component, raw) in zip(embeddable, embedded) {
             if let raw {
                 validComponents.append(component)
                 rawEmbeddings.append(raw)
@@ -141,7 +163,9 @@ struct OfflineSpeechComponentExtractor {
             ),
             timedEmbeddings: timed, audioLoadingSeconds: audioLoadingSeconds,
             segmentationSeconds: segmentationSeconds,
-            embeddingExtractionSeconds: Date().timeIntervalSince(extractionStart),
+            // Embedding overlaps segmentation: this is the time it still ran after segmentation
+            // ended, so the stages still add up to the wall time.
+            embeddingExtractionSeconds: Date().timeIntervalSince(produced.end),
             prepareWallSeconds: Date().timeIntervalSince(start),
             componentTraining: SpeechComponentTraining(
                 indices: training, cleanIntervals: intervals,
@@ -150,91 +174,158 @@ struct OfflineSpeechComponentExtractor {
         )
     }
 
-    /// The component model runs on CPU with a variable-length input. Leave two cores for
-    /// the other track's segmentation, ASR and the UI.
+    /// The component model runs on CPU with a variable-length input. Leave two cores for this
+    /// file's segmentation, which overlaps embedding, and for the other track, ASR and the UI.
     static var componentEmbeddingConcurrency: Int {
         max(1, min(8, ProcessInfo.processInfo.activeProcessorCount - 2))
     }
 
-    /// Runs `transform` for every index with at most `maxConcurrency` in flight and returns
-    /// the results in index order, exactly as a sequential loop would.
-    static func orderedParallelMap<T: Sendable>(
-        count: Int,
+    /// Transforms every item `produce` emits, starting while `produce` is still running, with at
+    /// most `maxConcurrency` transforms in flight. The results come back in emission order, exactly
+    /// as a sequential loop over the emitted items would return them. `emit` may only be called
+    /// while `produce` runs. The first failure on either side cancels the other side.
+    static func orderedStreamingMap<Item: Sendable, Produced: Sendable, T: Sendable>(
         maxConcurrency: Int,
-        _ transform: @escaping @Sendable (Int) throws -> T
-    ) async throws -> [T] {
-        guard count > 0 else { return [] }
-        let lanes = max(1, min(maxConcurrency, count))
-        return try await withThrowingTaskGroup(of: (Int, T).self) { group in
-            var results = [T?](repeating: nil, count: count)
-            var next = 0
-            func enqueue() {
-                let index = next
-                next += 1
-                group.addTask {
-                    try Task.checkCancellation()
-                    return (index, try transform(index))
+        produce: @escaping @Sendable (_ emit: @escaping @Sendable (Item) -> Void) async throws -> Produced,
+        transform: @escaping @Sendable (Item) throws -> T
+    ) async throws -> (produced: Produced, results: [T]) {
+        let (items, continuation) = AsyncStream.makeStream(of: Item.self)
+        let outcome = try await withThrowingTaskGroup(of: StreamingWorkerResult<Produced, T>.self) { workers in
+            workers.addTask {
+                defer { continuation.finish() }
+                return .produced(try await produce { continuation.yield($0) })
+            }
+            workers.addTask {
+                .transformed(try await transformInOrder(items, maxConcurrency: maxConcurrency, transform))
+            }
+            var produced: Produced?
+            var results: [T]?
+            while let finished = try await workers.next() {
+                switch finished {
+                case .produced(let value):
+                    produced = value
+                case .transformed(let values):
+                    results = values
                 }
             }
-            for _ in 0..<lanes { enqueue() }
+            return (produced: produced, results: results)
+        }
+        // A cancelled caller stops reading the stream early: never return partial results.
+        try Task.checkCancellation()
+        guard let produced = outcome.produced, let results = outcome.results else {
+            throw OfflineDiarizationError.processingFailed("Streamed work finished without a result")
+        }
+        return (produced, results)
+    }
+
+    private enum StreamingWorkerResult<Produced: Sendable, T: Sendable>: Sendable {
+        case produced(Produced)
+        case transformed([T])
+    }
+
+    /// Transforms streamed items with at most `maxConcurrency` in flight, each starting as soon as
+    /// a lane is free, and returns the results in arrival order.
+    private static func transformInOrder<Item: Sendable, T: Sendable>(
+        _ items: AsyncStream<Item>, maxConcurrency: Int, _ transform: @escaping @Sendable (Item) throws -> T
+    ) async throws -> [T] {
+        let lanes = max(1, maxConcurrency)
+        return try await withThrowingTaskGroup(of: (Int, T).self) { group in
+            var results: [T?] = []
+            var inFlight = 0
+            for await item in items {
+                if inFlight == lanes, let (index, value) = try await group.next() {
+                    results[index] = value
+                    inFlight -= 1
+                }
+                let index = results.count
+                results.append(nil)
+                group.addTask {
+                    try Task.checkCancellation()
+                    return (index, try transform(item))
+                }
+                inFlight += 1
+            }
             while let (index, value) = try await group.next() {
                 results[index] = value
-                if next < count { enqueue() }
             }
             let ordered = results.compactMap { $0 }
-            guard ordered.count == count else {
-                throw OfflineDiarizationError.processingFailed("A parallel component embedding returned no result")
+            guard ordered.count == results.count else {
+                throw OfflineDiarizationError.processingFailed("A streamed transform returned no result")
             }
             return ordered
         }
     }
 
+    /// Splits every chunk of a finished segmentation, in chunk order.
     private static func splitComponents(
         _ segmentation: SegmentationOutput, config: OfflineDiarizerConfig
     ) throws -> [Component] {
         var components: [Component] = []
         for chunk in 0..<segmentation.numChunks {
-            let masks = segmentation.speakerWeights[chunk]
-            let clean = masks.map { $0.reduce(0, +) == 1 }
-            let offset = Int((segmentation.chunkOffsets[chunk] * 16_000).rounded())
-            var slot = 0
-            for local in 0..<3 {
-                var groups: [[Int]] = []
-                for frame in 0..<589 where masks[frame][local] > 0 {
-                    if let previous = groups.last?.last,
-                        Double(frame - previous - 1) * segmentation.frameDuration <= config.minGapDuration
-                    {
-                        groups[groups.count - 1].append(frame)
+            components += try splitComponents(
+                chunk: chunk, masks: segmentation.speakerWeights[chunk],
+                offsetSeconds: segmentation.chunkOffsets[chunk], frameDuration: segmentation.frameDuration,
+                config: config)
+        }
+        return components
+    }
+
+    /// Splits one segmentation chunk into its speech components, in slot order. Streaming and
+    /// the finished segmentation both split through here, so they yield the same components.
+    private static func splitComponents(
+        chunk: Int, masks: [[Float]], offsetSeconds: Double, frameDuration: Double,
+        config: OfflineDiarizerConfig
+    ) throws -> [Component] {
+        guard masks.count == 589, masks.allSatisfy({ $0.count == 3 }) else {
+            throw OfflineDiarizationError.processingFailed("Unexpected Community-1 segmentation geometry")
+        }
+        let clean = masks.map { $0.reduce(0, +) == 1 }
+        let offset = Int((offsetSeconds * 16_000).rounded())
+        var components: [Component] = []
+        var slot = 0
+        for local in 0..<3 {
+            var groups: [[Int]] = []
+            for frame in 0..<589 where masks[frame][local] > 0 {
+                if let previous = groups.last?.last,
+                    Double(frame - previous - 1) * frameDuration <= config.minGapDuration
+                {
+                    groups[groups.count - 1].append(frame)
+                } else {
+                    groups.append([frame])
+                }
+            }
+            for active in groups {
+                guard let first = active.first, let last = active.last else {
+                    throw OfflineDiarizationError.processingFailed("Speech component has no activity")
+                }
+                let mask: [Float] = (first...last).map { clean[$0] ? masks[$0][local] : 0 }
+                var cleanRanges: [Range<Int>] = []
+                for frame in first...last where clean[frame] && masks[frame][local] > 0 {
+                    let range = (offset + frame * 270)..<(offset + (frame + 1) * 270)
+                    if let previous = cleanRanges.last, previous.upperBound == range.lowerBound {
+                        cleanRanges[cleanRanges.count - 1] = previous.lowerBound..<range.upperBound
                     } else {
-                        groups.append([frame])
+                        cleanRanges.append(range)
                     }
                 }
-                for active in groups {
-                    guard let first = active.first, let last = active.last else {
-                        throw OfflineDiarizationError.processingFailed("Speech component has no activity")
-                    }
-                    let mask: [Float] = (first...last).map { clean[$0] ? masks[$0][local] : 0 }
-                    var cleanRanges: [Range<Int>] = []
-                    for frame in first...last where clean[frame] && masks[frame][local] > 0 {
-                        let range = (offset + frame * 270)..<(offset + (frame + 1) * 270)
-                        if let previous = cleanRanges.last, previous.upperBound == range.lowerBound {
-                            cleanRanges[cleanRanges.count - 1] = previous.lowerBound..<range.upperBound
-                        } else {
-                            cleanRanges.append(range)
-                        }
-                    }
-                    components.append(
-                        Component(
-                            chunk: chunk, slot: slot, activeFrames: active, cleanMask: mask,
-                            sampleRange: (offset + first * 270)..<(offset + (last + 1) * 270),
-                            cleanIntervals: cleanRanges,
-                            trainingEligible: mask.reduce(0, +) >= config.embedding.minimumActiveRatio * 589
-                        ))
-                    slot += 1
-                }
+                components.append(
+                    Component(
+                        chunk: chunk, slot: slot, activeFrames: active, cleanMask: mask,
+                        sampleRange: (offset + first * 270)..<(offset + (last + 1) * 270),
+                        cleanIntervals: cleanRanges,
+                        trainingEligible: mask.reduce(0, +) >= config.embedding.minimumActiveRatio * 589
+                    ))
+                slot += 1
             }
         }
         return components
+    }
+
+    /// No arbitrary minimum turn length: only complete real FBank frames and at least one clean
+    /// pooling weight can produce an identity.
+    private static func isEmbeddable(_ component: Component, sampleCount: Int) -> Bool {
+        component.sampleRange.lowerBound >= 0 && component.sampleRange.upperBound <= sampleCount
+            && component.sampleRange.count >= 560 && component.cleanMask.contains(1)
     }
 
     private static func embed(
