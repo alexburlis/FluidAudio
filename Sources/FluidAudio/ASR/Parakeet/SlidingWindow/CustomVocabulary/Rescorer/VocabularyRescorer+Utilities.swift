@@ -16,6 +16,51 @@ extension VocabularyRescorer {
         return 1.0 - Float(distance) / Float(maxLen)
     }
 
+    /// True when a recognized span is an ordinary word that only covers the start or end of
+    /// every form of a term, so replacing it would invent the rest of the term.
+    ///
+    /// Plain character similarity makes "speech" 60% similar to "paraspeech", and the
+    /// context-biasing boost then outweighs a lower acoustic score. A complete recognized
+    /// word of `partialTermMinWordLength` or more characters that is a proper prefix or
+    /// suffix of a form blocks the replacement unless the span's other words resemble the
+    /// rest of that form: "para speech" and "super base" stay candidates, "speech" and
+    /// "use speech" do not. A span equal to any form (canonical or alias) is never partial.
+    ///
+    /// - Parameters:
+    ///   - spanWords: The span's words, normalized with `normalizeForSimilarity`.
+    ///   - termForms: The term's normalized canonical and alias forms.
+    static func isPartialTermSpan(spanWords: [String], termForms: [String]) -> Bool {
+        let words = spanWords.map(compactForm).filter { !$0.isEmpty }
+        let forms = termForms.map(compactForm).filter { !$0.isEmpty }
+        guard !words.isEmpty, !forms.isEmpty else { return false }
+        guard !forms.contains(words.joined()) else { return false }
+        return forms.allSatisfy { isPartial(words: words, of: $0) }
+    }
+
+    private static func isPartial(words: [String], of form: String) -> Bool {
+        let minimum = ContextBiasingConstants.partialTermMinWordLength
+        if let last = words.last, last.count >= minimum, last.count < form.count, form.hasSuffix(last) {
+            let rest = words.dropLast().joined()
+            if rest.isEmpty || stringSimilarity(rest, String(form.dropLast(last.count))) < partialRestSimilarity {
+                return true
+            }
+        }
+        if let first = words.first, first.count >= minimum, first.count < form.count, form.hasPrefix(first) {
+            let rest = words.dropFirst().joined()
+            if rest.isEmpty || stringSimilarity(rest, String(form.dropFirst(first.count))) < partialRestSimilarity {
+                return true
+            }
+        }
+        return false
+    }
+
+    private static var partialRestSimilarity: Float { ContextBiasingConstants.partialTermRestSimilarity }
+
+    /// A normalized form without the separators `normalizeForSimilarity` keeps.
+    private static func compactForm(_ normalized: String) -> String {
+        normalized.filter { $0 != " " && $0 != "-" && $0 != "'" }
+    }
+
     /// Compute string similarity with length penalty for compound matches.
     /// Penalizes when compound length differs significantly from vocab term length.
     static func lengthPenalizedSimilarity(_ compound: String, _ vocabTerm: String) -> Float {

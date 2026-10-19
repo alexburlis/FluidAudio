@@ -139,6 +139,25 @@ public enum ContextBiasingConstants {
     /// - Used in: `VocabularyRescorer+ConstrainedCTC.swift` stopword check
     public static let stopwordSpanSimilarity: Float = 0.85
 
+    /// Shortest recognized word that counts as an ordinary part of a vocabulary term.
+    ///
+    /// A complete recognized word this long that is only the start or end of a term
+    /// ("speech" in "Paraspeech", "post" in "PostHog") is a real word the speaker said,
+    /// so replacing it with the term needs the rest of the term in the span as well.
+    ///
+    /// - Value: `4` characters
+    /// - Used in: `VocabularyRescorer.isPartialTermSpan(spanWords:termForms:)`
+    public static let partialTermMinWordLength: Int = 4
+
+    /// Similarity the rest of a span needs to the rest of the term it partly matches.
+    ///
+    /// "para speech" (rest "para") and "super base" (rest "super" for "supa") stay
+    /// candidates; "use speech" (rest "use" for "para") does not.
+    ///
+    /// - Value: `0.50`
+    /// - Used in: `VocabularyRescorer.isPartialTermSpan(spanWords:termForms:)`
+    public static let partialTermRestSimilarity: Float = 0.50
+
     // MARK: - Context Biasing Weights
 
     /// Default context-biasing weight (CBW) per NeMo paper.
