@@ -158,6 +158,15 @@ public enum ContextBiasingConstants {
     /// - Used in: `VocabularyRescorer.isPartialTermSpan(spanWords:termForms:)`
     public static let partialTermRestSimilarity: Float = 0.50
 
+    /// Fewest characters a recognized word must leave out of a term to count as only part of it.
+    ///
+    /// "speech" leaves out "para" of "Paraspeech"; "supabas" leaves out one letter of "Supabase",
+    /// which is a clipped or misheard term that acoustic scoring should still be able to fix.
+    ///
+    /// - Value: `3` characters
+    /// - Used in: `VocabularyRescorer.isPartialTermSpan(spanWords:termForms:)`
+    public static let partialTermMinMissingLength: Int = 3
+
     // MARK: - Context Biasing Weights
 
     /// Default context-biasing weight (CBW) per NeMo paper.

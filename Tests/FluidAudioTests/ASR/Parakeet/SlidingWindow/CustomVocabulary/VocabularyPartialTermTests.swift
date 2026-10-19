@@ -54,6 +54,15 @@ final class VocabularyPartialTermTests: XCTestCase {
         XCTAssertFalse(isPartial("spee", ["paraspeechpro"]))
     }
 
+    func testNearCompleteTruncationStaysACandidate() {
+        // Fewer than three missing characters is a clipped or misheard term, not another word:
+        // acoustic scoring decides, as before.
+        XCTAssertFalse(isPartial("supabas", ["supabase"]))
+        XCTAssertFalse(isPartial("paraspeec", ["paraspeech"]))
+        XCTAssertFalse(isPartial("entry", ["sentry"]))
+        XCTAssertFalse(isPartial("linked", ["linkedin"]))
+    }
+
     func testUnrelatedAliasDoesNotSwitchOffTheGuard() {
         // "paraspeak" shares no edge with "speech", so it must not count as a reason to keep it.
         XCTAssertTrue(isPartial("speech", ["paraspeech", "paraspeak"]))
