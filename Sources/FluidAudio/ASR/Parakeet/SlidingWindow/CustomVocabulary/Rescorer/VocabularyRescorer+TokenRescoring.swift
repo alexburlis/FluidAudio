@@ -379,6 +379,11 @@ extension VocabularyRescorer {
                     )
                     guard !normalizedPhrase.isEmpty, normalizedPhrase != canonical else { continue }
                     if spanLength == 1, Self.stopwords.contains(normalizedPhrase) { continue }
+                    // An ordinary word that is only part of the term can never be replaced,
+                    // so it must not trigger the extra CTC pass either.
+                    if Self.isPartialTermSpan(spanWords: spanWords.map(Self.normalizeForSimilarity), termForms: forms) {
+                        continue
+                    }
 
                     let adjustedThreshold: Float
                     if spanLength > 1,
@@ -745,6 +750,13 @@ extension VocabularyRescorer {
                 // Check if similarity meets threshold after all adjustments
                 guard similarity >= minSimilarityForSpan else { continue }
 
+                if Self.isPartialTermSpan(
+                    spanWords: spanIndices.map { normalizedWords[$0] }, termForms: Self.preflightForms(for: term))
+                {
+                    debugLog("    [PARTIAL] '\(normalizedPhrase)' is only part of '\(vocabTerm)', skipping")
+                    continue
+                }
+
                 // Get temporal window for the span
                 let spanStartTime = wordTimings[wordIdx].startTime
                 let spanEndTime = wordTimings[wordIdx + spanLength - 1].endTime
@@ -926,6 +938,14 @@ extension VocabularyRescorer {
                         )
                         if bestSimilarity < minSimilarityForSpan { continue }
 
+                        if Self.isPartialTermSpan(
+                            spanWords: spanWords.map(Self.normalizeForSimilarity),
+                            termForms: Self.preflightForms(for: term))
+                        {
+                            debugLog("  [MULTI] Skipping '\(vocabTerm)': '\(tdtPhrase)' is only part of the term")
+                            continue
+                        }
+
                         // Get temporal window for the entire span
                         guard let firstIdx = spanIndices.first, let lastIdx = spanIndices.last else { continue }
                         let spanStartTime = wordTimings[firstIdx].startTime
@@ -1105,6 +1125,14 @@ extension VocabularyRescorer {
                         matchedSpanLength == 1
                         ? tdtWord
                         : spanIndices.map { wordTimings[$0].word }.joined(separator: " ")
+
+                    if Self.isPartialTermSpan(
+                        spanWords: matchedSpanLength >= 2 ? spanWords : [normalizedWord],
+                        termForms: Self.preflightForms(for: term))
+                    {
+                        debugLog("    [PARTIAL] '\(originalPhrase)' is only part of '\(vocabTerm)', skipping")
+                        continue
+                    }
 
                     // Get temporal window for the span
                     let spanStartTime = wordTimings[wordIdx].startTime
@@ -1336,6 +1364,12 @@ extension VocabularyRescorer {
                     "  [SPOTTER-RESCUE] Skipping '\(vocabTerm)' over '\(originalPhrase)': "
                         + "similarity \(String(format: "%.2f", bestSimilarity)) < floor "
                         + "\(String(format: "%.2f", spotterSimFloor)) (span=\(span.count))")
+                continue
+            }
+            if Self.isPartialTermSpan(
+                spanWords: spanWords.map(Self.normalizeForSimilarity), termForms: Self.preflightForms(for: term))
+            {
+                debugLog("  [SPOTTER-RESCUE] Skipping '\(vocabTerm)' over '\(originalPhrase)': only part of the term")
                 continue
             }
 

@@ -1,0 +1,63 @@
+import XCTest
+
+@testable import FluidAudio
+
+/// A recognized ordinary word that is only the beginning or end of a vocabulary term
+/// ("speech" for "Paraspeech") must not be replaced by the term; a span whose other words
+/// resemble the rest of the term ("para speech", "super base") still can be.
+final class VocabularyPartialTermTests: XCTestCase {
+    private func isPartial(_ span: String, _ forms: [String]) -> Bool {
+        VocabularyRescorer.isPartialTermSpan(
+            spanWords: span.split(separator: " ").map(String.init),
+            termForms: forms
+        )
+    }
+
+    func testOrdinaryWordThatEndsTheTermIsPartial() {
+        XCTAssertTrue(isPartial("speech", ["paraspeech"]))
+        XCTAssertTrue(isPartial("audio", ["fluidaudio"]))
+        XCTAssertTrue(isPartial("buddy", ["note buddy"]))
+    }
+
+    func testOrdinaryWordThatStartsTheTermIsPartial() {
+        XCTAssertTrue(isPartial("post", ["posthog"]))
+        XCTAssertTrue(isPartial("fluid", ["fluidaudio"]))
+    }
+
+    func testUnrelatedWordsBeforeTheTailAreStillPartial() {
+        XCTAssertTrue(isPartial("use speech", ["paraspeech"]))
+        XCTAssertTrue(isPartial("the speech", ["paraspeech"]))
+        XCTAssertTrue(isPartial("fair speech", ["paraspeech"]))
+    }
+
+    func testSplitTermWhoseOtherPartResemblesTheTermStaysACandidate() {
+        XCTAssertFalse(isPartial("para speech", ["paraspeech"]))
+        XCTAssertFalse(isPartial("pair speech", ["paraspeech"]))
+        XCTAssertFalse(isPartial("super base", ["supabase"]))
+        XCTAssertFalse(isPartial("post hog", ["posthog"]))
+        XCTAssertFalse(isPartial("nope buddy", ["note buddy"]))
+    }
+
+    func testMisrecognitionThatIsNotPartOfTheTermStaysACandidate() {
+        XCTAssertFalse(isPartial("superbass", ["supabase"]))
+        XCTAssertFalse(isPartial("million", ["dillion"]))
+    }
+
+    func testExactFormOrAliasIsNeverPartial() {
+        XCTAssertFalse(isPartial("paraspeech", ["paraspeech"]))
+        XCTAssertFalse(isPartial("speech", ["paraspeech", "speech"]))
+        XCTAssertFalse(isPartial("note buddy", ["note buddy"]))
+    }
+
+    func testShortWordsAndInnerPiecesAreLeftToTheExistingRules() {
+        XCTAssertFalse(isPartial("aud", ["fluidaudio"]))
+        XCTAssertFalse(isPartial("spee", ["paraspeechpro"]))
+    }
+
+    func testPartialForOneFormButCloseToAnotherAliasStaysACandidate() {
+        // "speech" is the tail of the canonical form, but an alias the user saved as
+        // "speech one" begins with it and the span matches that alias's start only.
+        XCTAssertTrue(isPartial("speech", ["paraspeech", "speechone"]))
+        XCTAssertFalse(isPartial("speech one", ["paraspeech", "speech one"]))
+    }
+}
