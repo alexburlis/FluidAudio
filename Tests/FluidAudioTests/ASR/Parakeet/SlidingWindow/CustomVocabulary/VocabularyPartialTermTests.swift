@@ -42,9 +42,15 @@ final class VocabularyPartialTermTests: XCTestCase {
 
     func testSplitTermWhoseOtherPartSoundsLikeTheTermStaysACandidate() {
         // A recorded call transcribed "dictating with Paraspeech" as "dictating with fair speech":
-        // "fair" shares the consonant sounds of "para", so acoustic scoring decides.
+        // "fair" shares the consonant sounds and a vowel of "para", so acoustic scoring decides.
         XCTAssertFalse(isPartial("fair speech", ["paraspeech"]))
         XCTAssertFalse(isPartial("for a speech", ["paraspeech"]))
+    }
+
+    func testOrdinaryPhrasesWithSimilarConsonantsStayPartial() {
+        XCTAssertTrue(isPartial("for speech", ["paraspeech"]))
+        XCTAssertTrue(isPartial("free speech", ["paraspeech"]))
+        XCTAssertTrue(isPartial("four speech", ["paraspeech"]))
     }
 
     func testMisrecognitionThatIsNotPartOfTheTermStaysACandidate() {

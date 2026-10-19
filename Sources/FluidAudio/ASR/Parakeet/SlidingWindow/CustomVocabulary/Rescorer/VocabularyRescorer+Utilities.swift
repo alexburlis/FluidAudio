@@ -32,8 +32,8 @@ extension VocabularyRescorer {
     /// context-biasing boost then outweighs a lower acoustic score. A complete recognized
     /// word of `partialTermMinWordLength` or more characters that is a proper prefix or
     /// suffix of a form makes the span partial for that form unless the span's other words
-    /// resemble the rest of it, in spelling or in consonant sounds: "para speech", "fair
-    /// speech" and "super base" stay candidates, "speech" and "use speech" do not. The span is
+    /// resemble the rest of it in spelling or in sound: "para speech", "fair speech" and
+    /// "super base" stay candidates, "speech", "use speech" and "for speech" do not. The span is
     /// rejected when it is partial for some form and resembles none; an alias it does not
     /// touch at all ("paraspeak") cannot rescue it, and a span equal to any form (canonical or
     /// alias) is never partial.
@@ -77,11 +77,18 @@ extension VocabularyRescorer {
             if stringSimilarity(rest.span, rest.form) >= ContextBiasingConstants.partialTermRestSimilarity {
                 return true
             }
-            // Same consonant sounds: "fair" for "para" in a misheard "fair speech".
-            let spanKey = consonantKey(rest.span)
-            return !spanKey.isEmpty && spanKey == consonantKey(rest.form)
+            return soundsAlike(rest.span, rest.form)
         }
         return resembles ? .resembles : .partial
+    }
+
+    /// True when `span` can be a mishearing of `form`: the same consonant classes, at least as
+    /// long, and a vowel in common, like "fair" for "para" in a misheard "fair speech". "for"
+    /// (shorter), "free" (no shared vowel) and "her" (other consonants) are not.
+    private static func soundsAlike(_ span: String, _ form: String) -> Bool {
+        let spanKey = consonantKey(span)
+        guard !spanKey.isEmpty, spanKey == consonantKey(form), span.count >= form.count else { return false }
+        return span.contains { "aeiou".contains($0) && form.contains($0) }
     }
 
     /// True when the span is one word that rhymes exactly with a one-word form but begins with
