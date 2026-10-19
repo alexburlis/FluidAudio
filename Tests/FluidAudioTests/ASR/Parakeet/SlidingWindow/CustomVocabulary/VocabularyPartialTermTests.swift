@@ -27,7 +27,9 @@ final class VocabularyPartialTermTests: XCTestCase {
     func testUnrelatedWordsBeforeTheTailAreStillPartial() {
         XCTAssertTrue(isPartial("use speech", ["paraspeech"]))
         XCTAssertTrue(isPartial("the speech", ["paraspeech"]))
-        XCTAssertTrue(isPartial("fair speech", ["paraspeech"]))
+        XCTAssertTrue(isPartial("to speech", ["paraspeech"]))
+        XCTAssertTrue(isPartial("her speech", ["paraspeech"]))
+        XCTAssertTrue(isPartial("a speech", ["paraspeech"]))
     }
 
     func testSplitTermWhoseOtherPartResemblesTheTermStaysACandidate() {
@@ -36,6 +38,13 @@ final class VocabularyPartialTermTests: XCTestCase {
         XCTAssertFalse(isPartial("super base", ["supabase"]))
         XCTAssertFalse(isPartial("post hog", ["posthog"]))
         XCTAssertFalse(isPartial("nope buddy", ["note buddy"]))
+    }
+
+    func testSplitTermWhoseOtherPartSoundsLikeTheTermStaysACandidate() {
+        // A recorded call transcribed "dictating with Paraspeech" as "dictating with fair speech":
+        // "fair" shares the consonant sounds of "para", so acoustic scoring decides.
+        XCTAssertFalse(isPartial("fair speech", ["paraspeech"]))
+        XCTAssertFalse(isPartial("for a speech", ["paraspeech"]))
     }
 
     func testMisrecognitionThatIsNotPartOfTheTermStaysACandidate() {
