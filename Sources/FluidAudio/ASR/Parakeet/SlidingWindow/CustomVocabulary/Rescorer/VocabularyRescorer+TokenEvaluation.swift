@@ -279,10 +279,14 @@ extension VocabularyRescorer {
         replacedIndices: inout Set<Int>,
         replacements: inout [RescoringResult]
     ) {
-        guard let firstIdx = candidate.spanIndices.first else { return }
+        guard let firstIdx = candidate.spanIndices.first, let lastIdx = candidate.spanIndices.last else { return }
 
         // Replace first word with the replacement, mark rest as empty
-        modifiedWords[firstIdx].word = result.replacement
+        modifiedWords[firstIdx].word = Self.replacementText(
+            result.replacement,
+            firstWord: modifiedWords[firstIdx].word,
+            lastWord: modifiedWords[lastIdx].word
+        )
         for idx in candidate.spanIndices.dropFirst() {
             modifiedWords[idx].word = ""  // Will be filtered out
         }
@@ -303,6 +307,22 @@ extension VocabularyRescorer {
                 reason: result.reason
             )
         )
+    }
+
+    /// The replacement as it appears in the text: punctuation before the span's first word and
+    /// after its last word, and a possessive "'s" on the last word, stay in place, so
+    /// "Superbass?" becomes "Supabase?" and "Dilion's," becomes "Dillion's,".
+    static func replacementText(_ replacement: String, firstWord: String, lastWord: String) -> String {
+        let leading = String(firstWord.prefix(while: \.isPunctuation))
+        var core = Substring(lastWord)
+        while let last = core.last, last.isPunctuation { core.removeLast() }
+        let trailing = String(lastWord[core.endIndex...])
+        let possessive = ["'s", "’s"].first { core.lowercased().hasSuffix($0) } ?? ""
+        var text = replacement
+        if !text.lowercased().hasSuffix(possessive) { text += possessive }
+        if !text.hasSuffix(trailing) { text += trailing }
+        if !text.hasPrefix(leading) { text = leading + text }
+        return text
     }
 
     // MARK: - Validation Rules
