@@ -404,10 +404,10 @@ extension VocabularyRescorer {
                                 >= adjustedThreshold
                         })
                     }
-                    // An ordinary word that is only part of the term can never be replaced, so it
+                    // An ordinary word that only looks like the term can never be replaced, so it
                     // must not trigger the extra CTC pass either. Checked after the cheap gate.
                     if resemblesTerm,
-                        !Self.isPartialTermSpan(spanWords: spanWords.map(Self.normalizeForSimilarity), termForms: forms)
+                        !Self.isLookalikeSpan(spanWords: spanWords.map(Self.normalizeForSimilarity), termForms: forms)
                     {
                         return true
                     }
@@ -747,10 +747,10 @@ extension VocabularyRescorer {
                 // Check if similarity meets threshold after all adjustments
                 guard similarity >= minSimilarityForSpan else { continue }
 
-                if Self.isPartialTermSpan(
+                if Self.isLookalikeSpan(
                     spanWords: spanIndices.map { normalizedWords[$0] }, termForms: Self.preflightForms(for: term))
                 {
-                    debugLog("    [PARTIAL] '\(normalizedPhrase)' is only part of '\(vocabTerm)', skipping")
+                    debugLog("    [LOOKALIKE] '\(normalizedPhrase)' only looks like '\(vocabTerm)', skipping")
                     continue
                 }
 
@@ -935,11 +935,11 @@ extension VocabularyRescorer {
                         )
                         if bestSimilarity < minSimilarityForSpan { continue }
 
-                        if Self.isPartialTermSpan(
+                        if Self.isLookalikeSpan(
                             spanWords: spanWords.map(Self.normalizeForSimilarity),
                             termForms: Self.preflightForms(for: term))
                         {
-                            debugLog("  [MULTI] Skipping '\(vocabTerm)': '\(tdtPhrase)' is only part of the term")
+                            debugLog("  [MULTI] Skipping '\(vocabTerm)': '\(tdtPhrase)' only looks like the term")
                             continue
                         }
 
@@ -1123,11 +1123,11 @@ extension VocabularyRescorer {
                         ? tdtWord
                         : spanIndices.map { wordTimings[$0].word }.joined(separator: " ")
 
-                    if Self.isPartialTermSpan(
+                    if Self.isLookalikeSpan(
                         spanWords: matchedSpanLength >= 2 ? spanWords : [normalizedWord],
                         termForms: Self.preflightForms(for: term))
                     {
-                        debugLog("    [PARTIAL] '\(originalPhrase)' is only part of '\(vocabTerm)', skipping")
+                        debugLog("    [LOOKALIKE] '\(originalPhrase)' only looks like '\(vocabTerm)', skipping")
                         continue
                     }
 
@@ -1363,10 +1363,11 @@ extension VocabularyRescorer {
                         + "\(String(format: "%.2f", spotterSimFloor)) (span=\(span.count))")
                 continue
             }
-            if Self.isPartialTermSpan(
+            if Self.isLookalikeSpan(
                 spanWords: spanWords.map(Self.normalizeForSimilarity), termForms: Self.preflightForms(for: term))
             {
-                debugLog("  [SPOTTER-RESCUE] Skipping '\(vocabTerm)' over '\(originalPhrase)': only part of the term")
+                debugLog(
+                    "  [SPOTTER-RESCUE] Skipping '\(vocabTerm)' over '\(originalPhrase)': it only looks like the term")
                 continue
             }
 

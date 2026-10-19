@@ -16,6 +16,15 @@ extension VocabularyRescorer {
         return 1.0 - Float(distance) / Float(maxLen)
     }
 
+    /// True when a recognized span only looks like the term in spelling and is another word:
+    /// it covers part of the term (``isPartialTermSpan(spanWords:termForms:)``) or rhymes with
+    /// it but starts with another sound (``isRhymingWordSpan(spanWords:termForms:)``).
+    /// Replacing such a span changes what was said.
+    static func isLookalikeSpan(spanWords: [String], termForms: [String]) -> Bool {
+        isPartialTermSpan(spanWords: spanWords, termForms: termForms)
+            || isRhymingWordSpan(spanWords: spanWords, termForms: termForms)
+    }
+
     /// True when a recognized span is an ordinary word that only covers the start or end of a
     /// term's form, so replacing it would invent the rest of the term.
     ///
@@ -23,10 +32,11 @@ extension VocabularyRescorer {
     /// context-biasing boost then outweighs a lower acoustic score. A complete recognized
     /// word of `partialTermMinWordLength` or more characters that is a proper prefix or
     /// suffix of a form makes the span partial for that form unless the span's other words
-    /// resemble the rest of it: "para speech" and "super base" stay candidates, "speech" and
-    /// "use speech" do not. The span is rejected when it is partial for some form and
-    /// resembles none; an alias it does not touch at all ("paraspeak") cannot rescue it, and
-    /// a span equal to any form (canonical or alias) is never partial.
+    /// resemble the rest of it, in spelling or in consonant sounds: "para speech", "fair
+    /// speech" and "super base" stay candidates, "speech" and "use speech" do not. The span is
+    /// rejected when it is partial for some form and resembles none; an alias it does not
+    /// touch at all ("paraspeak") cannot rescue it, and a span equal to any form (canonical or
+    /// alias) is never partial.
     ///
     /// - Parameters:
     ///   - spanWords: The span's words, normalized with `normalizeForSimilarity`.
@@ -62,10 +72,59 @@ extension VocabularyRescorer {
             rests.append((words.dropFirst().joined(), String(form.dropFirst(first.count))))
         }
         guard !rests.isEmpty else { return .unrelated }
-        let resembles = rests.contains {
-            !$0.span.isEmpty && stringSimilarity($0.span, $0.form) >= ContextBiasingConstants.partialTermRestSimilarity
+        let resembles = rests.contains { rest in
+            guard !rest.span.isEmpty else { return false }
+            if stringSimilarity(rest.span, rest.form) >= ContextBiasingConstants.partialTermRestSimilarity {
+                return true
+            }
+            // Same consonant sounds: "fair" for "para" in a misheard "fair speech".
+            let spanKey = consonantKey(rest.span)
+            return !spanKey.isEmpty && spanKey == consonantKey(rest.form)
         }
         return resembles ? .resembles : .partial
+    }
+
+    /// True when the span is one word that rhymes exactly with a one-word form but begins with
+    /// another consonant sound, so it is a different word: "million" and "billion" are not
+    /// "Dillion", "ran" is not "CRAN". Edit distance rates such minimal pairs as near matches,
+    /// and the context-biasing boost then outweighs the acoustic evidence of the first sound.
+    /// Spellings of the same sound ("cubernetes" for "kubernetes") stay candidates.
+    static func isRhymingWordSpan(spanWords: [String], termForms: [String]) -> Bool {
+        let words = spanWords.map(compactForm).filter { !$0.isEmpty }
+        guard words.count == 1, let word = words.first else { return false }
+        let forms = termForms.filter { !$0.contains(" ") }.map(compactForm).filter { !$0.isEmpty }
+        guard !forms.contains(word) else { return false }
+        let (wordOnset, wordRhyme) = onsetAndRhyme(word)
+        return forms.contains { form in
+            let (formOnset, formRhyme) = onsetAndRhyme(form)
+            return !wordRhyme.isEmpty && wordRhyme == formRhyme && consonantKey(wordOnset) != consonantKey(formOnset)
+        }
+    }
+
+    /// Splits a word into its leading consonants and the rest from the first vowel.
+    private static func onsetAndRhyme(_ word: String) -> (onset: String, rhyme: String) {
+        guard let firstVowel = word.firstIndex(where: { "aeiouy".contains($0) }) else { return (word, "") }
+        return (String(word[..<firstVowel]), String(word[firstVowel...]))
+    }
+
+    /// Soundex consonant classes of a word, without vowels, "h", "w" and "y" and with repeated
+    /// classes collapsed: "fair" and "para" are both "16", "use" is "2".
+    private static func consonantKey(_ word: String) -> String {
+        var key = ""
+        for character in word {
+            let digit: Character
+            switch character {
+            case "b", "f", "p", "v": digit = "1"
+            case "c", "g", "j", "k", "q", "s", "x", "z": digit = "2"
+            case "d", "t": digit = "3"
+            case "l": digit = "4"
+            case "m", "n": digit = "5"
+            case "r": digit = "6"
+            default: continue
+            }
+            if key.last != digit { key.append(digit) }
+        }
+        return key
     }
 
     /// A normalized form without the separators `normalizeForSimilarity` keeps.
