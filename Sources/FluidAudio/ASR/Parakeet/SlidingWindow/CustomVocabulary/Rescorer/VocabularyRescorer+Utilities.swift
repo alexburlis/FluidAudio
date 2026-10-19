@@ -91,20 +91,23 @@ extension VocabularyRescorer {
         return span.contains { "aeiou".contains($0) && form.contains($0) }
     }
 
-    /// True when the span is one word that rhymes exactly with a one-word form but begins with
-    /// another consonant sound, so it is a different word: "million" and "billion" are not
-    /// "Dillion", "ran" is not "CRAN". Edit distance rates such minimal pairs as near matches,
-    /// and the context-biasing boost then outweighs the acoustic evidence of the first sound.
-    /// Spellings of the same sound ("cubernetes" for "kubernetes") stay candidates.
+    /// True when a word of the span rhymes exactly with a one-word form but begins with another
+    /// consonant sound, so the span holds a different word: "million", "billion" and "two
+    /// million" are not "Dillion", "ran" is not "CRAN". Edit distance rates such minimal pairs as
+    /// near matches, and the context-biasing boost then outweighs the acoustic evidence of the
+    /// first sound. Spellings of the same sound ("cubernetes" for "kubernetes") and split terms
+    /// ("dill ion") stay candidates.
     static func isRhymingWordSpan(spanWords: [String], termForms: [String]) -> Bool {
         let words = spanWords.map(compactForm).filter { !$0.isEmpty }
-        guard words.count == 1, let word = words.first else { return false }
         let forms = termForms.filter { !$0.contains(" ") }.map(compactForm).filter { !$0.isEmpty }
-        guard !forms.contains(word) else { return false }
-        let (wordOnset, wordRhyme) = onsetAndRhyme(word)
-        return forms.contains { form in
-            let (formOnset, formRhyme) = onsetAndRhyme(form)
-            return !wordRhyme.isEmpty && wordRhyme == formRhyme && consonantKey(wordOnset) != consonantKey(formOnset)
+        guard !words.isEmpty, !forms.contains(words.joined()) else { return false }
+        return words.contains { word in
+            let (wordOnset, wordRhyme) = onsetAndRhyme(word)
+            return forms.contains { form in
+                let (formOnset, formRhyme) = onsetAndRhyme(form)
+                return !wordRhyme.isEmpty && wordRhyme == formRhyme
+                    && consonantKey(wordOnset) != consonantKey(formOnset)
+            }
         }
     }
 

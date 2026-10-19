@@ -25,6 +25,13 @@ final class VocabularyLookalikeSpanTests: XCTestCase {
         XCTAssertTrue(isRhyming("ran", ["cran"]))
     }
 
+    func testSpanHoldingARhymeWithAnotherFirstSoundIsAnotherPhrase() {
+        // With "million" rejected, the next candidates were "two million" and "3 million".
+        XCTAssertTrue(isRhyming("two million", ["dillion"]))
+        XCTAssertTrue(isRhyming("3 million", ["dillion"]))
+        XCTAssertTrue(isRhyming("million views", ["dillion"]))
+    }
+
     func testSpellingOfTheSameFirstSoundStaysACandidate() {
         XCTAssertFalse(isRhyming("cubernetes", ["kubernetes"]))
         XCTAssertFalse(isRhyming("phone", ["fone"]))
@@ -34,12 +41,13 @@ final class VocabularyLookalikeSpanTests: XCTestCase {
         XCTAssertFalse(isRhyming("dillon", ["dillion"]))
         XCTAssertFalse(isRhyming("superbass", ["supabase"]))
         XCTAssertFalse(isRhyming("dillions", ["dillion"]))
+        XCTAssertFalse(isRhyming("dill ion", ["dillion"]))
+        XCTAssertFalse(isRhyming("super base", ["supabase"]))
     }
 
-    func testExactFormsAndMultiWordSpansOrFormsAreLeftToOtherRules() {
+    func testExactFormsAndMultiWordFormsAreLeftToOtherRules() {
         XCTAssertFalse(isRhyming("dillion", ["dillion"]))
         XCTAssertFalse(isRhyming("million", ["dillion", "million"]))
-        XCTAssertFalse(isRhyming("two million", ["dillion"]))
         XCTAssertFalse(isRhyming("bote", ["note buddy"]))
     }
 
