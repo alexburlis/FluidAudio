@@ -51,11 +51,14 @@ extension VocabularyRescorer {
 
     private static func edgeRelation(of words: [String], to form: String) -> EdgeRelation {
         let minimum = ContextBiasingConstants.partialTermMinWordLength
+        let missing = ContextBiasingConstants.partialTermMinMissingLength
         var rests: [(span: String, form: String)] = []
-        if let last = words.last, last.count >= minimum, last.count < form.count, form.hasSuffix(last) {
+        if let last = words.last, last.count >= minimum, form.count - last.count >= missing, form.hasSuffix(last) {
             rests.append((words.dropLast().joined(), String(form.dropLast(last.count))))
         }
-        if let first = words.first, first.count >= minimum, first.count < form.count, form.hasPrefix(first) {
+        if let first = words.first, first.count >= minimum, form.count - first.count >= missing,
+            form.hasPrefix(first)
+        {
             rests.append((words.dropFirst().joined(), String(form.dropFirst(first.count))))
         }
         guard !rests.isEmpty else { return .unrelated }
