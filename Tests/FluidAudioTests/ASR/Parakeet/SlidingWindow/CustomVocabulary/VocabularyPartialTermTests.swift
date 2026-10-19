@@ -54,6 +54,17 @@ final class VocabularyPartialTermTests: XCTestCase {
         XCTAssertFalse(isPartial("spee", ["paraspeechpro"]))
     }
 
+    func testUnrelatedAliasDoesNotSwitchOffTheGuard() {
+        // "paraspeak" shares no edge with "speech", so it must not count as a reason to keep it.
+        XCTAssertTrue(isPartial("speech", ["paraspeech", "paraspeak"]))
+        XCTAssertTrue(isPartial("use speech", ["paraspeech", "paraspeak"]))
+    }
+
+    func testCompoundThatResemblesAnyFormStaysACandidate() {
+        XCTAssertFalse(isPartial("para speech", ["paraspeech", "paraspeak"]))
+        XCTAssertFalse(isPartial("superbass", ["supabase", "supa base"]))
+    }
+
     func testPartialForOneFormButCloseToAnotherAliasStaysACandidate() {
         // "speech" is the tail of the canonical form, but an alias the user saved as
         // "speech one" begins with it and the span matches that alias's start only.

@@ -379,11 +379,6 @@ extension VocabularyRescorer {
                     )
                     guard !normalizedPhrase.isEmpty, normalizedPhrase != canonical else { continue }
                     if spanLength == 1, Self.stopwords.contains(normalizedPhrase) { continue }
-                    // An ordinary word that is only part of the term can never be replaced,
-                    // so it must not trigger the extra CTC pass either.
-                    if Self.isPartialTermSpan(spanWords: spanWords.map(Self.normalizeForSimilarity), termForms: forms) {
-                        continue
-                    }
 
                     let adjustedThreshold: Float
                     if spanLength > 1,
@@ -399,20 +394,22 @@ extension VocabularyRescorer {
                         adjustedThreshold = threshold
                     }
 
-                    if forms.contains(where: {
+                    var resemblesTerm = forms.contains(where: {
                         Self.stringSimilarity(normalizedPhrase, $0) >= adjustedThreshold
-                    }) {
-                        return true
-                    }
-
-                    if spanLength > 1 {
+                    })
+                    if !resemblesTerm, spanLength > 1 {
                         let concatenated = Self.normalizeForSimilarity(spanWords.joined())
-                        if forms.contains(where: {
+                        resemblesTerm = forms.contains(where: {
                             Self.stringSimilarity(concatenated, $0.replacingOccurrences(of: " ", with: ""))
                                 >= adjustedThreshold
-                        }) {
-                            return true
-                        }
+                        })
+                    }
+                    // An ordinary word that is only part of the term can never be replaced, so it
+                    // must not trigger the extra CTC pass either. Checked after the cheap gate.
+                    if resemblesTerm,
+                        !Self.isPartialTermSpan(spanWords: spanWords.map(Self.normalizeForSimilarity), termForms: forms)
+                    {
+                        return true
                     }
                 }
             }

@@ -16,15 +16,17 @@ extension VocabularyRescorer {
         return 1.0 - Float(distance) / Float(maxLen)
     }
 
-    /// True when a recognized span is an ordinary word that only covers the start or end of
-    /// every form of a term, so replacing it would invent the rest of the term.
+    /// True when a recognized span is an ordinary word that only covers the start or end of a
+    /// term's form, so replacing it would invent the rest of the term.
     ///
     /// Plain character similarity makes "speech" 60% similar to "paraspeech", and the
     /// context-biasing boost then outweighs a lower acoustic score. A complete recognized
     /// word of `partialTermMinWordLength` or more characters that is a proper prefix or
-    /// suffix of a form blocks the replacement unless the span's other words resemble the
-    /// rest of that form: "para speech" and "super base" stay candidates, "speech" and
-    /// "use speech" do not. A span equal to any form (canonical or alias) is never partial.
+    /// suffix of a form makes the span partial for that form unless the span's other words
+    /// resemble the rest of it: "para speech" and "super base" stay candidates, "speech" and
+    /// "use speech" do not. The span is rejected when it is partial for some form and
+    /// resembles none; an alias it does not touch at all ("paraspeak") cannot rescue it, and
+    /// a span equal to any form (canonical or alias) is never partial.
     ///
     /// - Parameters:
     ///   - spanWords: The span's words, normalized with `normalizeForSimilarity`.
@@ -34,27 +36,34 @@ extension VocabularyRescorer {
         let forms = termForms.map(compactForm).filter { !$0.isEmpty }
         guard !words.isEmpty, !forms.isEmpty else { return false }
         guard !forms.contains(words.joined()) else { return false }
-        return forms.allSatisfy { isPartial(words: words, of: $0) }
+        let relations = forms.map { edgeRelation(of: words, to: $0) }
+        return relations.contains(.partial) && !relations.contains(.resembles)
     }
 
-    private static func isPartial(words: [String], of form: String) -> Bool {
+    private enum EdgeRelation {
+        /// The span shares no complete edge word with the form.
+        case unrelated
+        /// A complete span word is the form's start or end, and the rest does not match.
+        case partial
+        /// A complete span word is the form's start or end, and the rest resembles the form's rest.
+        case resembles
+    }
+
+    private static func edgeRelation(of words: [String], to form: String) -> EdgeRelation {
         let minimum = ContextBiasingConstants.partialTermMinWordLength
+        var rests: [(span: String, form: String)] = []
         if let last = words.last, last.count >= minimum, last.count < form.count, form.hasSuffix(last) {
-            let rest = words.dropLast().joined()
-            if rest.isEmpty || stringSimilarity(rest, String(form.dropLast(last.count))) < partialRestSimilarity {
-                return true
-            }
+            rests.append((words.dropLast().joined(), String(form.dropLast(last.count))))
         }
         if let first = words.first, first.count >= minimum, first.count < form.count, form.hasPrefix(first) {
-            let rest = words.dropFirst().joined()
-            if rest.isEmpty || stringSimilarity(rest, String(form.dropFirst(first.count))) < partialRestSimilarity {
-                return true
-            }
+            rests.append((words.dropFirst().joined(), String(form.dropFirst(first.count))))
         }
-        return false
+        guard !rests.isEmpty else { return .unrelated }
+        let resembles = rests.contains {
+            !$0.span.isEmpty && stringSimilarity($0.span, $0.form) >= ContextBiasingConstants.partialTermRestSimilarity
+        }
+        return resembles ? .resembles : .partial
     }
-
-    private static var partialRestSimilarity: Float { ContextBiasingConstants.partialTermRestSimilarity }
 
     /// A normalized form without the separators `normalizeForSimilarity` keeps.
     private static func compactForm(_ normalized: String) -> String {
