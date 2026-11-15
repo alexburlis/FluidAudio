@@ -1,0 +1,18 @@
+# New jobs allow security PRs only; repository security settings are separate.
+# Minor/patch security fixes are grouped; major fixes remain individual PRs.
+# Review upgrades against existing CI, patches, generated files and input digests.
+version: 2
+updates:
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+    open-pull-requests-limit: 0
+    groups:
+      github-actions-security:
+        applies-to: "security-updates"
+        patterns:
+          - "*"
+        update-types:
+          - "minor"
+          - "patch"
