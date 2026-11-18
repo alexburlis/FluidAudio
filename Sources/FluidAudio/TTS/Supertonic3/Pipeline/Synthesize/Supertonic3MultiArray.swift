@@ -41,43 +41,9 @@ public enum Supertonic3MultiArray {
         return arr
     }
 
-    /// Read out the contents of an `MLMultiArray` as a Swift `[Float]`,
+    /// Read the logical elements of an `MLMultiArray` in row-major order,
     /// handling Float32 / Float16 / Double / Int32 backing stores.
     public static func extractFloats(_ arr: MLMultiArray) -> [Float] {
-        let n = arr.count
-        var out = [Float](repeating: 0, count: n)
-        switch arr.dataType {
-        case .float32:
-            let src = arr.dataPointer.bindMemory(to: Float.self, capacity: n)
-            out.withUnsafeMutableBufferPointer { dst in
-                dst.baseAddress!.update(from: src, count: n)
-            }
-        case .float16:
-            #if arch(arm64)
-            let src = arr.dataPointer.bindMemory(to: Float16.self, capacity: n)
-            for i in 0..<n {
-                out[i] = Float(src[i])
-            }
-            #else
-            for i in 0..<n {
-                out[i] = arr[i].floatValue
-            }
-            #endif
-        case .double:
-            let src = arr.dataPointer.bindMemory(to: Double.self, capacity: n)
-            for i in 0..<n {
-                out[i] = Float(src[i])
-            }
-        case .int32:
-            let src = arr.dataPointer.bindMemory(to: Int32.self, capacity: n)
-            for i in 0..<n {
-                out[i] = Float(src[i])
-            }
-        @unknown default:
-            for i in 0..<n {
-                out[i] = arr[i].floatValue
-            }
-        }
-        return out
+        arr.rowMajorFloats()
     }
 }

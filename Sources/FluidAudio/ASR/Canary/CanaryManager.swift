@@ -8,8 +8,8 @@ import Foundation
 /// → [Projection] → argmax until EOS) → SentencePiece detokenize.
 ///
 /// The decoder carries no KV cache: each step re-runs the full `[1, 256]` token
-/// sequence (matches the converted CoreML model). The 15 s window is fixed; audio
-/// longer than 15 s is truncated (chunking is a future addition).
+/// sequence (matches the converted CoreML model). Longer audio is split into
+/// overlapping 15 s windows and decoded independently.
 ///
 /// - Note: Beta — this is a beta model conversion; API, model artifacts, and accuracy may change.
 public actor CanaryManager {
@@ -44,7 +44,7 @@ public actor CanaryManager {
     /// Audio within the 15 s window is decoded in one pass. Longer audio is split
     /// into overlapping 15 s windows (hop = 15 s − `chunkOverlapSeconds`), decoded
     /// independently, and stitched at the seams via token-level
-    /// longest-common-substring (`mergeTokenStreams`). No model change — each
+    /// longest-common-substring (`TokenOverlapMerger.merge`). No model change — each
     /// window still sees the fixed 15 s contract and the decoder is reset per window.
     public func transcribe(audio: [Float]) throws -> String {
         let maxN = CanaryConfig.maxSamples
@@ -63,7 +63,7 @@ public actor CanaryManager {
             if chunkIndex > 0, (end - start) <= (maxN - hop) { break }
 
             let tokens = try transcribeWindow(audio: Array(audio[start..<end]))
-            merged = Self.mergeTokenStreams(prefix: merged, suffix: tokens)
+            merged = TokenOverlapMerger.merge(prefix: merged, suffix: tokens)
 
             chunkIndex += 1
             if end >= audio.count { break }
@@ -79,54 +79,6 @@ public actor CanaryManager {
         let (encoder, encoderLength) = try runEncoder(mel: mel, melLength: melLength)
         let (embeddings, encoderMask) = try makeDecoderContext(encoder: encoder, encoderLength: encoderLength)
         return try greedyDecode(embeddings: embeddings, encoderMask: encoderMask)
-    }
-
-    /// Merge two adjacent window token streams using longest-common-substring.
-    ///
-    /// Both windows transcribe `chunkOverlapSeconds` of identical audio at their
-    /// seam, so their token ids share a common substring near the prefix's tail /
-    /// the suffix's head. Search a bounded window (`windowTokens` at the boundary)
-    /// for the longest common substring of length ≥ `minMatch`. On a hit, drop the
-    /// suffix's matched head so the seam is not duplicated; on a miss, concatenate
-    /// plainly — better to duplicate a few tokens than to lose content.
-    static func mergeTokenStreams(
-        prefix: [Int],
-        suffix: [Int],
-        windowTokens: Int = 32,
-        minMatch: Int = 4
-    ) -> [Int] {
-        if prefix.isEmpty { return suffix }
-        if suffix.isEmpty { return prefix }
-
-        let pTail = Array(prefix.suffix(windowTokens))
-        let sHead = Array(suffix.prefix(windowTokens))
-        let m = pTail.count
-        let n = sHead.count
-        if m == 0 || n == 0 { return prefix + suffix }
-
-        // Classic LCS-substring DP (O(m·n), m,n ≤ windowTokens).
-        var dp = [Int](repeating: 0, count: n + 1)
-        var bestLen = 0
-        var bestSEnd = 0  // index in sHead (exclusive) where the match ends
-        for i in 1...m {
-            var prev = 0
-            for j in 1...n {
-                let temp = dp[j]
-                if pTail[i - 1] == sHead[j - 1] {
-                    dp[j] = prev + 1
-                    if dp[j] > bestLen {
-                        bestLen = dp[j]
-                        bestSEnd = j
-                    }
-                } else {
-                    dp[j] = 0
-                }
-                prev = temp
-            }
-        }
-
-        guard bestLen >= minMatch else { return prefix + suffix }
-        return prefix + Array(suffix.dropFirst(bestSEnd))
     }
 
     // MARK: - Pipeline

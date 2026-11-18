@@ -27,12 +27,7 @@ extension VadManager {
         guard !vadResults.isEmpty, totalSamples > 0 else { return [] }
 
         let probabilities = vadResults.map { $0.probability }
-        // If the caller pins the negative threshold, derive a matching entry threshold via the offset.
-        let thresholdOverride: Float? = {
-            guard let negative = config.negativeThreshold else { return nil }
-            return min(1.0, negative + config.negativeThresholdOffset)
-        }()
-        let threshold = thresholdOverride ?? self.config.defaultThreshold
+        let threshold = config.effectivePositiveThreshold(baseThreshold: self.config.defaultThreshold)
         let rawSegments = detectSpeechSampleRanges(
             probabilities: probabilities,
             audioLengthSamples: totalSamples,

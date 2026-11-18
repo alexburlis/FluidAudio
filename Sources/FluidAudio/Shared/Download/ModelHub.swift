@@ -98,40 +98,7 @@ public enum ModelHub {
                 directory: directory, computeUnits: computeUnits, variant: variant,
                 config: config, progressHandler: progressHandler)
         } catch {
-            // In offline mode never delete cache + re-download. Surface
-            // the original load failure so the caller can decide.
-            if offlineMode {
-                logger.warning(
-                    "Offline mode: load failed and re-download blocked. \(error.localizedDescription)"
-                )
-                throw error
-            }
-
-            // Cancellation is not corruption. A cancelled first load (app
-            // teardown, user abort) must never wipe a valid cache — deleting
-            // here threw away fully-downloaded multi-hundred-MB repos.
-            if RetryPolicy.isCancellation(error) {
-                logger.info(
-                    "Load cancelled; preserving model cache. \(error.localizedDescription)")
-                throw error
-            }
-
-            // Transient network failures are not corruption either. An error
-            // reaching here has already exhausted RetryPolicy's in-flight
-            // retries, but the bytes on disk are valid and resumable
-            // (FileDownloader streams into `.partial` files with HTTP Range
-            // resume). Wiping would discard exactly the bytes that make the
-            // caller's next attempt cheap — on the flaky networks most
-            // likely to land here.
-            if RetryPolicy.isRetryable(error) {
-                logger.warning(
-                    "Load failed with transient network error; preserving model cache for resume. \(error.localizedDescription)"
-                )
-                throw error
-            }
-
-            logger.warning("First load failed: \(error.localizedDescription)")
-            logger.info("Deleting cache and re-downloading…")
+            guard shouldRecoverFromLoadFailure(error) else { throw error }
             let repoPath = directory.appendingPathComponent(repo.folderName)
 
             ModelCache.purgeCorruptedCache(at: repoPath)
@@ -278,29 +245,7 @@ public enum ModelHub {
         do {
             return try await load()
         } catch {
-            // Mirror loadModels: offline mode never purges or re-downloads;
-            // cancellation and transient network failures are not corruption
-            // and must preserve the (valid, resumable) bytes on disk.
-            if offlineMode {
-                logger.warning(
-                    "Offline mode: load failed and re-download blocked. \(error.localizedDescription)"
-                )
-                throw error
-            }
-            if RetryPolicy.isCancellation(error) {
-                logger.info(
-                    "Load cancelled; preserving model cache. \(error.localizedDescription)")
-                throw error
-            }
-            if RetryPolicy.isRetryable(error) {
-                logger.warning(
-                    "Load failed with transient network error; preserving model cache for resume. \(error.localizedDescription)"
-                )
-                throw error
-            }
-
-            logger.warning("First load failed: \(error.localizedDescription)")
-            logger.info("Deleting cache and re-downloading…")
+            guard shouldRecoverFromLoadFailure(error) else { throw error }
             ModelCache.purgeCorruptedCache(at: repoPath)
 
             try await ensureCacheComplete()
@@ -314,6 +259,44 @@ public enum ModelHub {
                 throw retryError
             }
         }
+    }
+
+    private static func shouldRecoverFromLoadFailure(_ error: Error) -> Bool {
+        // In offline mode never delete cache + re-download. Surface
+        // the original load failure so the caller can decide.
+        if offlineMode {
+            logger.warning(
+                "Offline mode: load failed and re-download blocked. \(error.localizedDescription)"
+            )
+            return false
+        }
+
+        // Cancellation is not corruption. A cancelled first load (app
+        // teardown, user abort) must never wipe a valid cache — deleting
+        // here threw away fully-downloaded multi-hundred-MB repos.
+        if RetryPolicy.isCancellation(error) {
+            logger.info(
+                "Load cancelled; preserving model cache. \(error.localizedDescription)")
+            return false
+        }
+
+        // Transient network failures are not corruption either. An error
+        // reaching here has already exhausted RetryPolicy's in-flight
+        // retries, but the bytes on disk are valid and resumable
+        // (FileDownloader streams into `.partial` files with HTTP Range
+        // resume). Wiping would discard exactly the bytes that make the
+        // caller's next attempt cheap — on the flaky networks most
+        // likely to land here.
+        if RetryPolicy.isRetryable(error) {
+            logger.warning(
+                "Load failed with transient network error; preserving model cache for resume. \(error.localizedDescription)"
+            )
+            return false
+        }
+
+        logger.warning("First load failed: \(error.localizedDescription)")
+        logger.info("Deleting cache and re-downloading…")
+        return true
     }
 
     private static func loadModelsOnce(

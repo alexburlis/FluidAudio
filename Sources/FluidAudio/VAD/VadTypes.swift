@@ -80,6 +80,12 @@ public struct VadSegmentationConfig: Sendable {
         self.useMaxPossibleSilenceAtMaxSpeech = useMaxPossibleSilenceAtMaxSpeech
     }
 
+    /// Resolve the entry threshold, deriving it from an explicit exit threshold when provided.
+    func effectivePositiveThreshold(baseThreshold: Float) -> Float {
+        guard let negative = negativeThreshold else { return baseThreshold }
+        return min(1.0, negative + negativeThresholdOffset)
+    }
+
     /// Resolve the working negative threshold used for hysteresis when we only know the positive threshold.
     /// Mirrors Silero's heuristic of subtracting a fixed offset, but keeps an override escape hatch.
     public func effectiveNegativeThreshold(baseThreshold: Float) -> Float {
@@ -92,6 +98,7 @@ public struct VadSegmentationConfig: Sendable {
 
 public struct VadState: Sendable {
     public static let contextLength = 64
+    static let stateLength = 128
 
     public let hiddenState: [Float]
     public let cellState: [Float]
@@ -108,8 +115,8 @@ public struct VadState: Sendable {
     /// Create initial zero states for the first chunk
     public static func initial() -> VadState {
         return VadState(
-            hiddenState: Array(repeating: 0.0, count: 128),
-            cellState: Array(repeating: 0.0, count: 128),
+            hiddenState: Array(repeating: 0.0, count: stateLength),
+            cellState: Array(repeating: 0.0, count: stateLength),
             context: Array(repeating: 0.0, count: contextLength)
         )
     }

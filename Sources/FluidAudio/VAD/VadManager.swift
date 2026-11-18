@@ -21,7 +21,7 @@ public actor VadManager {
     /// Model expects 4096 new samples (256ms at 16kHz) plus 64-sample context (total 4160)
     public static let chunkSize = 4096
     private static let contextSize = VadState.contextLength
-    private static let stateSize = 128
+    private static let stateSize = VadState.stateLength
     private static let modelInputSize = chunkSize + contextSize
     public static let sampleRate = 16000
 
@@ -151,12 +151,6 @@ public actor VadManager {
             for: .applicationSupportDirectory, in: .userDomainMask
         ).first!
         return appSupport.appendingPathComponent("FluidAudio", isDirectory: true)
-    }
-
-    /// Check if audio chunk is completely silent (all zeros or below threshold)
-    private func isSilentAudio(_ audioChunk: [Float]) -> Bool {
-        let silenceThreshold: Float = 1e-10
-        return audioChunk.allSatisfy { abs($0) <= silenceThreshold }
     }
 
     internal func processChunk(_ audioChunk: [Float], inputState: VadState? = nil) async throws -> VadResult {

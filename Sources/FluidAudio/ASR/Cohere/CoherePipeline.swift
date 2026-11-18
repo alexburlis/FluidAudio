@@ -564,7 +564,7 @@ public actor CoherePipeline {
             encoderSecs += result.encoderSeconds
             decoderSecs += result.decoderSeconds
 
-            mergedTokens = Self.mergeTokenStreams(prefix: mergedTokens, suffix: result.tokenIds)
+            mergedTokens = TokenOverlapMerger.merge(prefix: mergedTokens, suffix: result.tokenIds)
 
             chunkIndex += 1
             if end >= audio.count { break }
@@ -578,59 +578,6 @@ public actor CoherePipeline {
             encoderSeconds: encoderSecs,
             decoderSeconds: decoderSecs,
             totalSeconds: CFAbsoluteTimeGetCurrent() - total0)
-    }
-
-    /// Merge two adjacent chunk token streams using longest-common-substring.
-    ///
-    /// Both chunks transcribe ~5 s of identical audio at their seam, so their
-    /// token IDs share a common subsequence near the prefix's tail / the
-    /// suffix's head. We search a bounded window (`windowTokens` tokens at the
-    /// boundary) for the longest common substring of length ≥ `minMatch`. On a
-    /// hit we drop the prefix's matched suffix and concatenate the suffix
-    /// verbatim. On a miss we concatenate plainly — better to duplicate a few
-    /// tokens than to lose content.
-    static func mergeTokenStreams(
-        prefix: [Int],
-        suffix: [Int],
-        windowTokens: Int = 32,
-        minMatch: Int = 4
-    ) -> [Int] {
-        if prefix.isEmpty { return suffix }
-        if suffix.isEmpty { return prefix }
-
-        let pTail = Array(prefix.suffix(windowTokens))
-        let sHead = Array(suffix.prefix(windowTokens))
-        let m = pTail.count
-        let n = sHead.count
-        if m == 0 || n == 0 { return prefix + suffix }
-
-        // Classic LCS-substring DP (O(m·n), m,n ≤ windowTokens).
-        var dp = [Int](repeating: 0, count: n + 1)
-        var bestLen = 0
-        var bestSEnd = 0  // index in sHead (exclusive) where the match ends
-        for i in 1...m {
-            var prev = 0
-            for j in 1...n {
-                let temp = dp[j]
-                if pTail[i - 1] == sHead[j - 1] {
-                    dp[j] = prev + 1
-                    if dp[j] > bestLen {
-                        bestLen = dp[j]
-                        bestSEnd = j
-                    }
-                } else {
-                    dp[j] = 0
-                }
-                prev = temp
-            }
-        }
-
-        guard bestLen >= minMatch else { return prefix + suffix }
-
-        // Keep the prefix as-is (it already contains one copy of the overlap
-        // tokens) and drop the suffix's matched head so the seam is not
-        // duplicated.
-        return prefix + Array(suffix.dropFirst(bestSEnd))
     }
 
     // MARK: Encoder

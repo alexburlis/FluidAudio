@@ -2,6 +2,35 @@ import CoreML
 import Foundation
 
 extension MLMultiArray {
+    /// Read the logical elements in row-major order, ignoring padding in the backing storage.
+    func rowMajorFloats() -> [Float] {
+        var expectedStride = 1
+        for (dimension, stride) in zip(shape.reversed(), strides.reversed()) {
+            let width = dimension.intValue
+            guard width <= 1 || stride.intValue == expectedStride else {
+                return (0..<count).map { self[$0].floatValue }
+            }
+            expectedStride *= width
+        }
+
+        switch dataType {
+        case .float32:
+            return withUnsafeBytes { Array($0.bindMemory(to: Float.self).prefix(count)) }
+        case .float16:
+            #if arch(arm64)
+            return withUnsafeBytes { $0.bindMemory(to: Float16.self).prefix(count).map { Float($0) } }
+            #else
+            return (0..<count).map { self[$0].floatValue }
+            #endif
+        case .double:
+            return withUnsafeBytes { $0.bindMemory(to: Double.self).prefix(count).map { Float($0) } }
+        case .int32:
+            return withUnsafeBytes { $0.bindMemory(to: Int32.self).prefix(count).map { Float($0) } }
+        default:
+            return (0..<count).map { self[$0].floatValue }
+        }
+    }
+
     /// Reset all elements in the array to the given value.
     func reset(to value: NSNumber) {
         resetData(to: value)

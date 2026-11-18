@@ -32,14 +32,6 @@ public final class ANEMemoryOptimizer {
         }
     }
 
-    /// Calculate optimal strides for ANE tile processing
-    private func calculateOptimalStrides(
-        for shape: [NSNumber],
-        dataType: MLMultiArrayDataType
-    ) -> [NSNumber] {
-        return ANEMemoryUtils.calculateOptimalStrides(for: shape)
-    }
-
     /// Get or create a reusable buffer from pool
     public func getPooledBuffer(
         key: String,
@@ -88,31 +80,11 @@ public final class ANEMemoryOptimizer {
         shape: [NSNumber],
         offset: Int = 0
     ) throws -> MLMultiArray {
-        // The view pads its innermost stride, so its storage span can exceed its element count;
-        // bound the span, not the count, or a padded view would run past a tighter source.
-        let strides = calculateOptimalStrides(for: shape, dataType: sourceArray.dataType)
-        let viewSpan = shape.isEmpty ? 0 : strides[0].intValue * shape[0].intValue
-        let sourceSpan =
-            sourceArray.shape.isEmpty ? 0 : sourceArray.strides[0].intValue * sourceArray.shape[0].intValue
-
-        guard offset + viewSpan <= sourceSpan else {
+        do {
+            return try ANEMemoryUtils.createZeroCopyView(from: sourceArray, offset: offset, shape: shape)
+        } catch ANEMemoryUtils.ANEMemoryError.invalidShape {
             throw DiarizerError.invalidArrayBounds
         }
-
-        // Calculate byte offset
-        let elementSize = ANEMemoryUtils.getElementSize(for: sourceArray.dataType)
-
-        let byteOffset = offset * elementSize
-        let offsetPointer = sourceArray.dataPointer.advanced(by: byteOffset)
-
-        // Create view with same data but new shape
-        return try MLMultiArray(
-            dataPointer: offsetPointer,
-            shape: shape,
-            dataType: sourceArray.dataType,
-            strides: strides,
-            deallocator: nil  // No deallocation since it's a view
-        )
     }
 
     /// Copy data using ANE-optimized memory operations

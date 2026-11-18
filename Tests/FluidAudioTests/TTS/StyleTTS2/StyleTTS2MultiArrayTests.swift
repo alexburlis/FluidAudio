@@ -45,6 +45,17 @@ final class StyleTTS2MultiArrayTests: XCTestCase {
         XCTAssertEqual(StyleTTS2MultiArray.extractFloats(arr), [1.5, -2.25])
     }
 
+    func testExtractFloatsSkipsPaddingAndPreservesLogicalOrder() throws {
+        var storage: [Float] = [1, 2, 99, 3, 4, 99]
+        try storage.withUnsafeMutableBufferPointer { buffer in
+            let array = try MLMultiArray(
+                dataPointer: XCTUnwrap(buffer.baseAddress), shape: [2, 2], dataType: .float32, strides: [3, 1])
+
+            XCTAssertEqual(StyleTTS2MultiArray.extractFloats(array), [1, 2, 3, 4])
+            XCTAssertEqual(Supertonic3MultiArray.extractFloats(array), [1, 2, 3, 4])
+        }
+    }
+
     // MARK: - Shape product mismatch
 
     func testMakeFloat32ShapeMismatchPreconditionFails() {

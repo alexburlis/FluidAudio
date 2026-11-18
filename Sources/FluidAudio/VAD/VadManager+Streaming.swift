@@ -41,12 +41,7 @@ extension VadManager {
         nextState.modelState = modelState
         nextState.processedSamples += chunkSampleCount
 
-        // If the caller pins the negative threshold, derive a matching entry threshold via the offset
-        let thresholdOverride: Float? = {
-            guard let negative = config.negativeThreshold else { return nil }
-            return min(1.0, negative + config.negativeThresholdOffset)
-        }()
-        let threshold = thresholdOverride ?? self.config.defaultThreshold
+        let threshold = config.effectivePositiveThreshold(baseThreshold: self.config.defaultThreshold)
 
         let negativeThreshold = config.effectiveNegativeThreshold(baseThreshold: threshold)
         let speechPadSamples = Int(config.speechPadding * Double(Self.sampleRate))

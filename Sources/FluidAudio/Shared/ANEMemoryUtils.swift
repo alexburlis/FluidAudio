@@ -119,27 +119,26 @@ public enum ANEMemoryUtils {
         shape: [NSNumber],
         strides: [NSNumber]? = nil
     ) throws -> MLMultiArray {
+        guard offset >= 0 else { throw ANEMemoryError.invalidShape }
+
         // Validate bounds using stride-aware backing size (accounts for ANE padding)
-        let elementSize = getElementSize(for: array.dataType)
         let viewStrides = strides ?? calculateOptimalStrides(for: shape)
         let viewBackingElements =
             shape.isEmpty ? 0 : viewStrides[0].intValue * shape[0].intValue
         let sourceBackingElements =
             array.shape.isEmpty ? 0 : array.strides[0].intValue * array.shape[0].intValue
-        let byteOffset = offset * elementSize
-
-        guard byteOffset + viewBackingElements * elementSize <= sourceBackingElements * elementSize else {
+        guard offset <= sourceBackingElements, viewBackingElements <= sourceBackingElements - offset else {
             throw ANEMemoryError.invalidShape
         }
 
-        // Create view with offset pointer
+        let byteOffset = offset * getElementSize(for: array.dataType)
         let offsetPointer = array.dataPointer.advanced(by: byteOffset)
 
         return try MLMultiArray(
             dataPointer: offsetPointer,
             shape: shape,
             dataType: array.dataType,
-            strides: strides ?? calculateOptimalStrides(for: shape),
+            strides: viewStrides,
             deallocator: nil  // No deallocation for views
         )
     }

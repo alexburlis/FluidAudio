@@ -130,35 +130,11 @@ public struct Speaker: Identifiable, Codable, Equatable, Hashable, Sendable {
 
     /// Recalculate main embedding as average of all raw embeddings
     public mutating func recalculateMainEmbedding() {
-        guard !rawEmbeddings.isEmpty,
-            let firstEmbedding = rawEmbeddings.first,
-            !firstEmbedding.embedding.isEmpty
+        guard let averageEmbedding = SpeakerUtilities.averageEmbeddings(rawEmbeddings.map { $0.embedding })
         else { return }
 
-        let embeddingSize = firstEmbedding.embedding.count
-        var averageEmbedding = [Float](repeating: 0.0, count: embeddingSize)
-
-        // Calculate average of all raw embeddings
-        var validCount = 0
-        for raw in rawEmbeddings {
-            if raw.embedding.count == embeddingSize {
-                for i in 0..<embeddingSize {
-                    averageEmbedding[i] += raw.embedding[i]
-                }
-                validCount += 1
-            }
-        }
-
-        // Divide by count to get average
-        if validCount > 0 {
-            let count = Float(validCount)
-            for i in 0..<embeddingSize {
-                averageEmbedding[i] /= count
-            }
-
-            self.currentEmbedding = VDSPOperations.l2Normalize(averageEmbedding)
-            self.updatedAt = Date()
-        }
+        self.currentEmbedding = averageEmbedding
+        self.updatedAt = Date()
     }
 
     /// Merge another speaker into this one

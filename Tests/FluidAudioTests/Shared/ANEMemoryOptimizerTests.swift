@@ -212,6 +212,26 @@ final class ANEMemoryOptimizerTests: XCTestCase {
         XCTAssertEqual(view.dataPointer, source.dataPointer.advanced(by: 768 * MemoryLayout<Float>.stride))
     }
 
+    func testZeroCopyViewRejectsOffsetBeforeSource() throws {
+        var storage: [Float] = [0, 1, 2, 3]
+        try storage.withUnsafeMutableBufferPointer { buffer in
+            // Keep the preceding element allocated so the check can exercise the API safely.
+            let source = try MLMultiArray(
+                dataPointer: XCTUnwrap(buffer.baseAddress).advanced(by: 1),
+                shape: [3], dataType: .float32, strides: [1])
+            XCTAssertThrowsError(try optimizer.createZeroCopyView(from: source, shape: [1], offset: -1)) {
+                guard case DiarizerError.invalidArrayBounds = $0 else {
+                    return XCTFail("Expected invalidArrayBounds, got \($0)")
+                }
+            }
+            XCTAssertThrowsError(try ANEMemoryUtils.createZeroCopyView(from: source, offset: -1, shape: [1])) {
+                guard case ANEMemoryUtils.ANEMemoryError.invalidShape = $0 else {
+                    return XCTFail("Expected invalidShape, got \($0)")
+                }
+            }
+        }
+    }
+
     func testMemoryPressureHandling() throws {
         // Create many buffers to simulate memory pressure
         var buffers: [MLMultiArray] = []

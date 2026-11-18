@@ -39,20 +39,11 @@ public struct TTS {
     /// ``MandarinCustomLexicon/parse(_:)`` for the line spec.
     private static func loadMandarinLexicon(from path: String?) throws -> MandarinCustomLexicon? {
         guard let path = path else { return nil }
-        let url = resolveLexiconURL(path)
+        let url = resolveInputURL(path)
         let lexicon = try MandarinCustomLexicon.load(from: url)
         logger.info(
             "Loaded Mandarin custom lexicon with \(lexicon.count) entries from \(url.path)")
         return lexicon
-    }
-
-    private static func resolveLexiconURL(_ path: String) -> URL {
-        let expanded = (path as NSString).expandingTildeInPath
-        if expanded.hasPrefix("/") {
-            return URL(fileURLWithPath: expanded)
-        }
-        let cwd = URL(fileURLWithPath: FileManager.default.currentDirectoryPath, isDirectory: true)
-        return cwd.appendingPathComponent(expanded)
     }
 
     public static func run(arguments: [String]) async {

@@ -41,26 +41,7 @@ enum WERCalculator {
         let hypothesis = TextNormalizer.normalize(rawHypothesis)
         let reference = TextNormalizer.normalize(rawReference)
 
-        let hypWords = hypothesis.components(separatedBy: .whitespacesAndNewlines).filter { !$0.isEmpty }
-        let refWords = reference.components(separatedBy: .whitespacesAndNewlines).filter { !$0.isEmpty }
-
-        let wordDistance = editDistance(hypWords, refWords)
-        let wer = refWords.isEmpty ? 0.0 : Double(wordDistance.total) / Double(refWords.count)
-
-        let hypChars = Array(hypothesis.replacingOccurrences(of: " ", with: ""))
-        let refChars = Array(reference.replacingOccurrences(of: " ", with: ""))
-        let charDistance = editDistance(hypChars.map(String.init), refChars.map(String.init))
-        let cer = refChars.isEmpty ? 0.0 : Double(charDistance.total) / Double(refChars.count)
-
-        return (
-            wer,
-            cer,
-            wordDistance.insertions,
-            wordDistance.deletions,
-            wordDistance.substitutions,
-            refWords.count,
-            refChars.count
-        )
+        return calculateNormalizedWERAndCER(hypothesis: hypothesis, reference: reference)
     }
 
     /// WER + CER using the conservative `basicNormalize` path (lowercase, NFKD,
@@ -84,25 +65,34 @@ enum WERCalculator {
         let hypothesis = TextNormalizer.basicNormalize(rawHypothesis, spellOutLocale: spellOutLocale)
         let reference = TextNormalizer.basicNormalize(rawReference, spellOutLocale: spellOutLocale)
 
+        return calculateNormalizedWERAndCER(hypothesis: hypothesis, reference: reference)
+    }
+
+    private static func calculateNormalizedWERAndCER(
+        hypothesis: String, reference: String
+    )
+        -> (
+            wer: Double, cer: Double, insertions: Int, deletions: Int, substitutions: Int, totalWords: Int,
+            totalCharacters: Int
+        )
+    {
         let hypWords = hypothesis.components(separatedBy: .whitespacesAndNewlines).filter { !$0.isEmpty }
         let refWords = reference.components(separatedBy: .whitespacesAndNewlines).filter { !$0.isEmpty }
-
-        let wordDistance = editDistance(hypWords, refWords)
-        let wer = refWords.isEmpty ? 0.0 : Double(wordDistance.total) / Double(refWords.count)
+        let wordMetrics = calculateWordMetrics(hypothesis: hypWords, reference: refWords)
 
         let hypChars = Array(hypothesis.replacingOccurrences(of: " ", with: ""))
         let refChars = Array(reference.replacingOccurrences(of: " ", with: ""))
-        let charDistance = editDistance(hypChars.map(String.init), refChars.map(String.init))
-        let cer = refChars.isEmpty ? 0.0 : Double(charDistance.total) / Double(refChars.count)
+        let charMetrics = calculateWordMetrics(
+            hypothesis: hypChars.map(String.init), reference: refChars.map(String.init))
 
         return (
-            wer,
-            cer,
-            wordDistance.insertions,
-            wordDistance.deletions,
-            wordDistance.substitutions,
-            refWords.count,
-            refChars.count
+            wordMetrics.wer,
+            charMetrics.wer,
+            wordMetrics.insertions,
+            wordMetrics.deletions,
+            wordMetrics.substitutions,
+            wordMetrics.totalWords,
+            charMetrics.totalWords
         )
     }
 
